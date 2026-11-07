@@ -1,0 +1,10 @@
+/build/
+/cmake-build-*/
+/.vs/
+/.idea/
+/.qtcreator/
+*.user
+*.suo
+*.exe
+*.obj
+*.pdb
