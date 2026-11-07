@@ -17,6 +17,24 @@ ready-made editor widget. The same core powers both frontends.
 
 ---
 
+## Screenshots
+
+The Qt GUI in light and dark theme (toggle at the top right of the toolbar).
+
+<div align="center">
+
+![CS-218 Text Editor, light theme](screenshots/gui-light.png)
+
+*Light theme*
+
+![CS-218 Text Editor, dark theme](screenshots/gui-dark.png)
+
+*Dark theme*
+
+</div>
+
+---
+
 ## Table of contents
 
 1. [Features](#1-features)
