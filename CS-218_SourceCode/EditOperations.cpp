@@ -13,6 +13,13 @@ namespace {
 bool isContinuationByte(char c) {
     return (static_cast<unsigned char>(c) & 0xC0u) == 0x80u;
 }
+
+// A byte offset is valid when it points to the end of the string or to
+// the first byte of a UTF-8 code point (not to a continuation byte).
+bool isValidUtf8Boundary(const std::string& text, std::size_t position) {
+    return position <= text.size() &&
+           (position == text.size() || !isContinuationByte(text[position]));
+}
 } // namespace
 
 EditOperations::EditOperations(TextDocument& document, std::size_t undoCapacity)
@@ -63,8 +70,7 @@ bool EditOperations::insertText(std::size_t line, std::size_t position,
     }
     {
         const std::string current = document_.getLine(line);
-        if (position > current.size()) return false;
-        if (position < current.size() && isContinuationByte(current[position])) return false;
+        if (!isValidUtf8Boundary(current, position)) return false;
     }
 
     if (!undoStack_.push(UndoRecord(EditType::InsertText, line - 1, position, "", text))) {
@@ -102,7 +108,7 @@ bool EditOperations::deleteWord(std::size_t line, std::size_t position) {
     if (line == 0 || line > document_.lineCount()) return false;
 
     const std::string text = document_.getLine(line);
-    if (position >= text.size()) return false;
+    if (position >= text.size() || !isValidUtf8Boundary(text, position)) return false;
     // Delete the whitespace at the cursor and the following word as one edit.
     std::size_t end = position;
     while (end < text.size() &&
@@ -124,13 +130,22 @@ bool EditOperations::deleteRange(std::size_t line, std::size_t position,
     }
     const std::string text = document_.getLine(line);
     if (position > text.size() || count > text.size() - position) return false;
+    const std::size_t end = position + count;
+    if (!isValidUtf8Boundary(text, position) || !isValidUtf8Boundary(text, end)) {
+        return false;
+    }
 
     const std::string removed = text.substr(position, count);
     if (!undoStack_.push(UndoRecord(EditType::DeleteText, line - 1, position,
                                     removed, ""))) {
         return false;
     }
-    deleteRangeRaw(line - 1, position, count);
+    try {
+        deleteRangeRaw(line - 1, position, count);
+    } catch (...) {
+        undoStack_.discardTop();
+        throw;
+    }
     return true;
 }
 
@@ -198,6 +213,11 @@ bool EditOperations::replaceText(std::size_t line, std::size_t position,
 
     const std::string oldLine = document_.getLine(line);
     if (position > oldLine.size() || count > oldLine.size() - position) return false;
+    const std::size_t end = position + count;
+    if (!isValidUtf8Boundary(oldLine, position) ||
+        !isValidUtf8Boundary(oldLine, end)) {
+        return false;
+    }
     const std::string oldText = oldLine.substr(position, count);
     if (oldText == replacement) return false;
 

@@ -46,6 +46,17 @@ public:
     std::vector<Match> findMatchesInLine(const std::string& pattern, std::size_t lineNumber,
                                          bool matchCase = true, bool wholeWord = false) const;
 
+    // Builds the KMP LPS (failure) table. Reuse it when searching the same
+    // pattern across multiple lines, as Replace All does.
+    static std::vector<std::size_t> buildLpsTable(const std::string& pattern,
+                                                  bool matchCase = true);
+
+    // Searches one line using a previously built LPS table, avoiding repeated
+    // preprocessing when the same pattern is used on many lines.
+    std::vector<Match> findMatchesInLine(const std::string& pattern, std::size_t lineNumber,
+                                         const std::vector<std::size_t>& lps,
+                                         bool matchCase, bool wholeWord) const;
+
     // Prints the outcome and every matching location to standard output.
     void displaySearchResults(const std::string& pattern) const;
 

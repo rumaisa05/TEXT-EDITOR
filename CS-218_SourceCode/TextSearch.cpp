@@ -19,7 +19,7 @@ bool isWordByte(char c) {
 
 // Builds the KMP failure table (longest proper prefix which is also a suffix)
 // over the (optionally case-folded) pattern.
-std::vector<std::size_t> buildFailureTable(const std::string& pattern, bool matchCase) {
+std::vector<std::size_t> buildFailureTableImpl(const std::string& pattern, bool matchCase) {
     std::vector<std::size_t> lps(pattern.size(), 0);
     std::size_t length = 0;
     std::size_t i = 1;
@@ -86,7 +86,7 @@ SearchStatus TextSearch::searchText(const std::string& pattern, std::vector<Matc
         return SearchStatus::EmptyDocument;
     }
 
-    const std::vector<std::size_t> lps = buildFailureTable(pattern, matchCase);
+    const std::vector<std::size_t> lps = buildLpsTable(pattern, matchCase);
     const std::size_t lines = document_.lineCount();
     std::vector<std::size_t> columns;
     for (std::size_t line = 1; line <= lines; ++line) {
@@ -103,7 +103,7 @@ bool TextSearch::findFirstOccurrence(const std::string& pattern, Match& first,
         return false;
     }
 
-    const std::vector<std::size_t> lps = buildFailureTable(pattern, matchCase);
+    const std::vector<std::size_t> lps = buildLpsTable(pattern, matchCase);
     const std::size_t lines = document_.lineCount();
     std::vector<std::size_t> columns;
     for (std::size_t line = 1; line <= lines; ++line) {
@@ -129,14 +129,26 @@ bool TextSearch::isSearchStringPresent(const std::string& pattern) const {
     return findFirstOccurrence(pattern, unused);
 }
 
+std::vector<std::size_t> TextSearch::buildLpsTable(const std::string& pattern,
+                                                       bool matchCase) {
+    return buildFailureTableImpl(pattern, matchCase);
+}
+
 std::vector<Match> TextSearch::findMatchesInLine(const std::string& pattern, std::size_t lineNumber,
                                                  bool matchCase, bool wholeWord) const {
+    if (InputValidator::isSearchStringEmpty(pattern)) return {};
+    const std::vector<std::size_t> lps = buildLpsTable(pattern, matchCase);
+    return findMatchesInLine(pattern, lineNumber, lps, matchCase, wholeWord);
+}
+
+std::vector<Match> TextSearch::findMatchesInLine(const std::string& pattern, std::size_t lineNumber,
+                                                 const std::vector<std::size_t>& lps,
+                                                 bool matchCase, bool wholeWord) const {
     std::vector<Match> matches;
-    if (InputValidator::isSearchStringEmpty(pattern) ||
+    if (InputValidator::isSearchStringEmpty(pattern) || lps.size() != pattern.size() ||
         !InputValidator::isValidLineNumber(lineNumber, document_.lineCount())) {
         return matches;
     }
-    const std::vector<std::size_t> lps = buildFailureTable(pattern, matchCase);
     std::vector<std::size_t> columns;
     scanLine(document_.getLine(lineNumber), pattern, lps, matchCase, wholeWord, false, columns);
     for (std::size_t column : columns) matches.push_back(Match{lineNumber, column});

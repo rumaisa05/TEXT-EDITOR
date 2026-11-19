@@ -91,8 +91,12 @@ ReplaceResult TextReplace::replaceAllOccurrences(const std::string& pattern,
     std::string newDocument;
     const std::size_t lines = document_.lineCount();
 
+    // The pattern is the same for every line, so preprocess it only once.
+    const std::vector<std::size_t> lps = TextSearch::buildLpsTable(pattern, matchCase);
+
     for (std::size_t line = 1; line <= lines; ++line) {
-        const std::vector<Match> matches = search_.findMatchesInLine(pattern, line, matchCase, wholeWord);
+        const std::vector<Match> matches =
+            search_.findMatchesInLine(pattern, line, lps, matchCase, wholeWord);
         const std::string oldLine = document_.getLine(line);
         if (matches.empty()) {
             newDocument += oldLine;
