@@ -59,6 +59,7 @@ private:
 
     static bool readAnswer(std::string& answer);   // next non-empty input line
     static bool fileExists(const std::string& name);
+    static bool resolveFilename(const std::string& name, std::string& resolvedName);
     static void readFromDisk(const std::string& name, std::string& content);   // throws (binary read)
     void writeToDisk(const std::string& name) const;                           // throws
     UnsavedChoice askUnsavedChoice() const;

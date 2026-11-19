@@ -3,21 +3,105 @@
 #include "InputValidator.h"
 #include "PathUtil.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>     // std::strerror
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <ios>
 #include <iostream>
 #include <stdexcept>
 #include <system_error>
+#include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 // File operations stage changes before committing them so a failed load or save
 // does not damage the open document or an existing destination file.
 namespace {
+
+std::string trimFilename(const std::string& text) {
+    const std::size_t start = text.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    const std::size_t end = text.find_last_not_of(" \t\r\n");
+    return text.substr(start, end - start + 1);
+}
+
+bool filenamesEqual(const std::filesystem::path& path,
+                    const std::string& requestedName) {
+#ifdef _WIN32
+    const std::wstring actualWide = path.filename().wstring();
+    const std::wstring stemWide = path.stem().wstring();
+    const std::wstring requestedWide = pathFromUtf8(requestedName).wstring();
+    const auto equalIgnoringCase = [](const std::wstring& left,
+                                      const std::wstring& right) {
+        if (left.size() != right.size()) return false;
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            if (std::towlower(left[i]) != std::towlower(right[i])) return false;
+        }
+        return true;
+    };
+    return equalIgnoringCase(actualWide, requestedWide) ||
+           equalIgnoringCase(stemWide, requestedWide);
+#else
+    const std::string actual = path.filename().u8string();
+    const std::string stem = path.stem().u8string();
+    const auto equalIgnoringCase = [](const std::string& left,
+                                      const std::string& right) {
+        if (left.size() != right.size()) return false;
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            const unsigned char a = static_cast<unsigned char>(left[i]);
+            const unsigned char b = static_cast<unsigned char>(right[i]);
+            if (std::tolower(a) != std::tolower(b)) return false;
+        }
+        return true;
+    };
+    if (equalIgnoringCase(actual, requestedName) ||
+        equalIgnoringCase(stem, requestedName)) {
+        return true;
+    }
+    return false;
+#endif
+}
+
+bool isBareFilename(const std::string& name) {
+    const std::filesystem::path path = pathFromUtf8(name);
+    return path.parent_path().empty();
+}
+
+void collectMatches(const std::filesystem::path& root,
+                    const std::string& requestedName,
+                    std::vector<std::string>& matches,
+                    const std::size_t limit) {
+    if (matches.size() >= limit) return;
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator iterator(
+        root,
+        std::filesystem::directory_options::skip_permission_denied,
+        error);
+    const std::filesystem::recursive_directory_iterator end;
+
+    while (!error && iterator != end && matches.size() < limit) {
+        try {
+            const std::filesystem::directory_entry& entry = *iterator;
+            if (entry.is_regular_file(error) &&
+                filenamesEqual(entry.path(), requestedName)) {
+                matches.push_back(entry.path().lexically_normal().u8string());
+            }
+            if (error) error.clear();
+            iterator.increment(error);
+        } catch (const std::filesystem::filesystem_error&) {
+            error.clear();
+            iterator.increment(error);
+        }
+    }
+}
 
 // "what" plus the operating system's reason, when errno has one.
 std::string withReason(const std::string& what, int err) {
@@ -99,6 +183,78 @@ bool FileManager::fileExists(const std::string& name) {
     const std::filesystem::path path = pathFromUtf8(name);
     return std::filesystem::exists(path, error) &&
            std::filesystem::is_regular_file(path, error);
+}
+
+bool FileManager::resolveFilename(const std::string& name,
+                                  std::string& resolvedName) {
+    resolvedName = trimFilename(name);
+    if (resolvedName.empty() || !isBareFilename(resolvedName)) {
+        return true;
+    }
+
+    std::error_code error;
+    const std::filesystem::path cwd = std::filesystem::current_path(error);
+    if (!error) {
+        const std::filesystem::path local = cwd / pathFromUtf8(resolvedName);
+        if (fileExists(local.u8string())) {
+            resolvedName = local.u8string();
+            return true;
+        }
+    }
+
+    std::vector<std::string> matches;
+    std::vector<std::filesystem::path> roots;
+
+#ifdef _WIN32
+    char driveList[256] = {};
+    if (GetLogicalDriveStringsA(static_cast<DWORD>(sizeof(driveList) - 1),
+                                 driveList) != 0) {
+        for (char* drive = driveList; *drive; drive += std::strlen(drive) + 1) {
+            roots.emplace_back(pathFromUtf8(drive));
+        }
+    }
+#else
+    roots.emplace_back("/");
+#endif
+
+    for (const std::filesystem::path& root : roots) {
+        const std::size_t matchesBeforeDrive = matches.size();
+        if (std::filesystem::exists(root, error) &&
+            std::filesystem::is_directory(root, error)) {
+            collectMatches(root, resolvedName, matches, matchesBeforeDrive + 20);
+        }
+        error.clear();
+    }
+
+    if (matches.empty()) return false;
+
+    std::sort(matches.begin(), matches.end(), [](const std::string& left,
+                                                  const std::string& right) {
+        return left.size() < right.size() ||
+               (left.size() == right.size() &&
+                std::tolower(static_cast<unsigned char>(left[0])) <
+                std::tolower(static_cast<unsigned char>(right[0])));
+    });
+
+    matches.erase(std::unique(matches.begin(), matches.end()), matches.end());
+    if (matches.size() == 1) {
+        resolvedName = matches.front();
+        return true;
+    }
+
+    std::cout << "Multiple files named '" << resolvedName << "' were found:\n";
+    for (std::size_t i = 0; i < matches.size(); ++i) {
+        std::cout << "  " << (i + 1) << ". " << matches[i] << '\n';
+    }
+
+    int selection = 0;
+    if (!InputValidator::readIntInRange(
+            "Enter the number of the file to open: ", 1,
+            static_cast<int>(matches.size()), selection)) {
+        return false;
+    }
+    resolvedName = matches[static_cast<std::size_t>(selection - 1)];
+    return true;
 }
 
 // Reads a whole file into 'content'. 'content' is touched ONLY on success,
@@ -278,10 +434,21 @@ bool FileManager::openFile(const std::string& name, bool resolveChanges) {
         return false;
     }
 
+    std::string resolvedName;
+    if (!resolveFilename(name, resolvedName)) {
+        std::cout << "No file named '" << trimFilename(name)
+                  << "' was found on the available drives.\n";
+        return false;
+    }
+    if (!std::filesystem::is_regular_file(pathFromUtf8(resolvedName))) {
+        std::cout << "Error: resolved filename is invalid.\n";
+        return false;
+    }
+
     // Step 1: read the file into a TEMPORARY string. If this throws, the
     // current document is completely untouched.
     std::string content;
-    readFromDisk(name, content);
+    readFromDisk(resolvedName, content);
     TextDocument newDocument;
     newDocument.loadText(content);
 
@@ -291,7 +458,7 @@ bool FileManager::openFile(const std::string& name, bool resolveChanges) {
 
     // Step 3: commit. Everything that can throw (the copy of the name) happens
     // first; the swaps cannot throw, so the commit is all-or-nothing.
-    std::string newName(name);
+    std::string newName(resolvedName);
     const bool newCrlf = content.find("\r\n") != std::string::npos;
     document_.swap(newDocument);
     crlf_ = newCrlf;
