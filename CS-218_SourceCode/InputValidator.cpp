@@ -105,6 +105,7 @@ bool InputValidator::isDocumentEmpty(const TextDocument& document) {
 }
 
 bool InputValidator::isValidFilename(const std::string& filename) {
+    // Validate path components as well as characters that filesystems reject.
     const std::string trimmed = trim(filename);
     if (trimmed.empty() || trimmed.size() > kMaxFilenameLength) {
         return false;
@@ -150,6 +151,7 @@ bool InputValidator::isValidFilename(const std::string& filename) {
 
     std::size_t componentCount = 0;
     std::size_t first = start;
+    // Validate each path component separately before applying dot-segment rules.
     while (first < normalized.size()) {
         const std::size_t last = normalized.find('/', first);
         const std::size_t length = (last == std::string::npos) ? normalized.size() - first : last - first;
@@ -201,6 +203,7 @@ bool InputValidator::validateMenuChoice(const std::string& input, int minChoice,
 }
 
 bool InputValidator::validateUserInput(const std::string& input) {
+    // Limit console text by bytes and reject control characters.
     if (input.size() > kMaxInputLength) {
         return false;
     }
@@ -213,6 +216,7 @@ bool InputValidator::validateUserInput(const std::string& input) {
 }
 
 bool InputValidator::readLine(const std::string& prompt, std::string& line) {
+    // Read one console line and remove the CR left by CRLF input.
     std::cout << prompt;
     if (!std::getline(std::cin, line)) {
         return false;

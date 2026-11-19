@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace {
+// UTF-8 continuation bytes have the binary prefix 10xxxxxx.
 bool isContinuationByte(char c) {
     return (static_cast<unsigned char>(c) & 0xC0u) == 0x80u;
 }
@@ -23,6 +24,7 @@ bool isValidUtf8Boundary(const std::string& text, std::size_t position) {
 EditOperations::EditOperations(TextDocument& document, std::size_t undoCapacity)
     : document_(document), undoStack_(undoCapacity) {}
 
+// Rebuilds one line around inserted text after validating the byte position.
 void EditOperations::insertTextRaw(std::size_t line, std::size_t position,
                                    const std::string& text) {
     TextDocument::LineNode* node = document_.nodeAt(line);
@@ -48,6 +50,7 @@ void EditOperations::insertTextRaw(std::size_t line, std::size_t position,
     node->capacity = newLength + 1;
 }
 
+// Removes bytes in place after checking the raw range boundaries.
 void EditOperations::deleteRangeRaw(std::size_t line, std::size_t position,
                                     std::size_t count) {
     TextDocument::LineNode* node = document_.nodeAt(line);
@@ -60,6 +63,7 @@ void EditOperations::deleteRangeRaw(std::size_t line, std::size_t position,
     node->data[node->length] = '\0';
 }
 
+// Validates a single-line insertion and records its inverse before editing.
 bool EditOperations::insertText(std::size_t line, std::size_t position,
                                 const std::string& text) {
     if (text.empty() || text.find_first_of("\r\n") != std::string::npos ||
@@ -83,12 +87,13 @@ bool EditOperations::insertText(std::size_t line, std::size_t position,
     return true;
 }
 
+// Adapts one byte to the validated text-insertion path.
 bool EditOperations::insertCharacter(std::size_t line, std::size_t position, char ch) {
     if (ch == '\n' || ch == '\r') return false;
     return insertText(line, position, std::string(1, ch));
 }
 
-// Delete the full UTF-8 character, not just its first byte.
+// Finds all bytes of the encoded character before deleting it as one range.
 bool EditOperations::deleteCharacter(std::size_t line, std::size_t position) {
     if (line == 0 || line > document_.lineCount()) return false;
     const std::string text = document_.getLine(line);
@@ -101,12 +106,12 @@ bool EditOperations::deleteCharacter(std::size_t line, std::size_t position) {
     return deleteRange(line, position, length);
 }
 
+// Deletes from the cursor through the following word, including whitespace there.
 bool EditOperations::deleteWord(std::size_t line, std::size_t position) {
     if (line == 0 || line > document_.lineCount()) return false;
 
     const std::string text = document_.getLine(line);
     if (position >= text.size() || !isValidUtf8Boundary(text, position)) return false;
-    // Include whitespace at the cursor and the following word.
     std::size_t end = position;
     while (end < text.size() &&
            std::isspace(static_cast<unsigned char>(text[end]))) {
@@ -120,6 +125,7 @@ bool EditOperations::deleteWord(std::size_t line, std::size_t position) {
     return deleteRange(line, position, end - position);
 }
 
+// Saves the removed bytes for undo, then shifts the remaining line contents.
 bool EditOperations::deleteRange(std::size_t line, std::size_t position,
                                  std::size_t count) {
     if (line == 0 || line > document_.lineCount() || count == 0) {
@@ -146,6 +152,7 @@ bool EditOperations::deleteRange(std::size_t line, std::size_t position,
     return true;
 }
 
+// Inserts a validated line and records enough information to undo it.
 bool EditOperations::insertLine(std::size_t line, const std::string& text) {
     if (line == 0 ||
         document_.lineCount() == std::numeric_limits<std::size_t>::max() ||
@@ -165,6 +172,7 @@ bool EditOperations::insertLine(std::size_t line, const std::string& text) {
     return true;
 }
 
+// Removes one line, preserving the document's required final empty line.
 bool EditOperations::deleteLine(std::size_t line) {
     if (line == 0 || line > document_.lineCount()) return false;
 
@@ -178,6 +186,7 @@ bool EditOperations::deleteLine(std::size_t line) {
     return true;
 }
 
+// Stores a whole deleted range in one undo record before unlinking its lines.
 bool EditOperations::deleteLineRange(std::size_t firstLine, std::size_t count) {
     if (count == 0 || firstLine == 0 || firstLine > document_.lineCount() ||
         count > document_.lineCount() - firstLine + 1) {
@@ -185,6 +194,7 @@ bool EditOperations::deleteLineRange(std::size_t firstLine, std::size_t count) {
     }
 
     std::string removed;
+    // Keep the original lines in order so one undo record can restore the range.
     for (std::size_t i = 0; i < count; ++i) {
         if (i != 0) removed.push_back('\n');
         removed += document_.getLine(firstLine + i);
@@ -195,12 +205,14 @@ bool EditOperations::deleteLineRange(std::size_t firstLine, std::size_t count) {
                                     removed, deletingWholeDocument ? "1" : ""))) {
         return false;
     }
+    // Remove repeatedly at the same index because later lines shift left.
     for (std::size_t i = 0; i < count; ++i) {
         document_.removeLineRaw(firstLine - 1);
     }
     return true;
 }
 
+// Replaces a byte range on one line and records both versions for undo.
 bool EditOperations::replaceText(std::size_t line, std::size_t position,
                                  std::size_t count, const std::string& replacement) {
     if (line == 0 || line > document_.lineCount() || count == 0 ||
@@ -233,6 +245,7 @@ bool EditOperations::replaceText(std::size_t line, std::size_t position,
     return true;
 }
 
+// Applies a whole-document update while recording only its changed span.
 bool EditOperations::replaceDocumentText(const std::string& rawText, bool coalesceLocalEdit) {
     // Normalize line endings before comparing the documents.
     std::string text;
@@ -269,6 +282,7 @@ bool EditOperations::replaceDocumentText(const std::string& rawText, bool coales
         --oldEnd;
         --newEnd;
     }
+    // Extend the suffix boundary too, so neither changed span splits UTF-8 bytes.
     while ((oldEnd < oldText.size() && isContinuationByte(oldText[oldEnd])) ||
            (newEnd < text.size() && isContinuationByte(text[newEnd]))) {
         if (oldEnd < oldText.size()) ++oldEnd;
@@ -282,6 +296,7 @@ bool EditOperations::replaceDocumentText(const std::string& rawText, bool coales
         inserted.find_first_of("\r\n") == std::string::npos) {
         std::size_t line = 1;
         std::size_t lineStart = 0;
+        // Find whether the changed span is small enough to stay within one line.
         while (line <= document_.lineCount()) {
             const std::size_t currentLineLength = document_.lineLength(line);
             const std::size_t lineEnd = lineStart + currentLineLength;
@@ -324,6 +339,7 @@ bool EditOperations::replaceDocumentText(const std::string& rawText, bool coales
         inserted.find_first_of("\r\n") == std::string::npos) {
         std::size_t line = 1;
         std::size_t lineStart = 0;
+        // Route a non-coalesced same-line change through the matching edit method.
         while (line <= document_.lineCount()) {
             const std::size_t lineEnd = lineStart + document_.lineLength(line);
             if (prefix >= lineStart && prefix <= lineEnd) {
@@ -355,6 +371,7 @@ bool EditOperations::replaceDocumentText(const std::string& rawText, bool coales
     return true;
 }
 
+// Applies the inverse represented by one undo record without popping it.
 void EditOperations::applyUndo(const UndoRecord& record) {
     switch (record.type) {
         case EditType::InsertText:
@@ -380,6 +397,7 @@ void EditOperations::applyUndo(const UndoRecord& record) {
                 std::vector<std::unique_ptr<TextDocument::LineNode>> nodes;
                 nodes.reserve(lineCount);
                 std::size_t start = 0;
+                // Recreate each deleted line before modifying the active list.
                 for (std::size_t i = 0; i < lineCount; ++i) {
                     const std::size_t newline = record.oldText.find('\n', start);
                     if (i + 1 < lineCount && newline == std::string::npos) {
@@ -415,6 +433,7 @@ void EditOperations::applyUndo(const UndoRecord& record) {
 
                 TextDocument::LineNode* first = nodes.front().get();
                 TextDocument::LineNode* last = nodes.back().get();
+                // Link the restored nodes together, then splice them into the list.
                 for (std::size_t i = 1; i < nodes.size(); ++i) {
                     nodes[i - 1]->next = nodes[i].get();
                     nodes[i]->prev = nodes[i - 1].get();
@@ -426,6 +445,7 @@ void EditOperations::applyUndo(const UndoRecord& record) {
                 if (current) current->prev = last;
                 else document_.tail_ = last;
                 document_.lineCount_ += lineCount;
+                // The document now owns the linked nodes; release the temporary guards.
                 for (std::unique_ptr<TextDocument::LineNode>& node : nodes) {
                     node.release();
                 }

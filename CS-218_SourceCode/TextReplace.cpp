@@ -8,6 +8,7 @@ TextReplace::TextReplace(TextDocument& document, EditOperations& editOperations)
       editOperations_(editOperations),
       search_(document) {}
 
+// Rejects invalid patterns, empty documents, and replacements with line breaks.
 ReplaceStatus TextReplace::validateReplacement(const std::string& pattern,
                                                const std::string& replacement) const {
     if (InputValidator::isSearchStringEmpty(pattern)) {
@@ -23,11 +24,13 @@ ReplaceStatus TextReplace::validateReplacement(const std::string& pattern,
     return ReplaceStatus::Success;
 }
 
+// Counts the matches returned by the shared search implementation.
 std::size_t TextReplace::countOccurrences(const std::string& pattern,
                                           bool matchCase, bool wholeWord) const {
     return search_.findAllOccurrences(pattern, matchCase, wholeWord).size();
 }
 
+// Replaces the first match in document order and keeps the edit undoable.
 ReplaceResult TextReplace::replaceFirstOccurrence(const std::string& pattern,
                                                   const std::string& replacement) {
     const ReplaceStatus validation = validateReplacement(pattern, replacement);
@@ -45,6 +48,7 @@ ReplaceResult TextReplace::replaceFirstOccurrence(const std::string& pattern,
     return ReplaceResult{ReplaceStatus::Success, 1};
 }
 
+// Verifies the selected location still contains the requested pattern.
 ReplaceResult TextReplace::replaceOccurrenceAt(const Match& location, const std::string& pattern,
                                                const std::string& replacement) {
     const ReplaceStatus validation = validateReplacement(pattern, replacement);
@@ -75,6 +79,7 @@ ReplaceResult TextReplace::replaceOccurrenceAt(const Match& location, const std:
     return ReplaceResult{ReplaceStatus::Success, 1};
 }
 
+// Applies all accepted matches as one undoable document edit.
 ReplaceResult TextReplace::replaceAllOccurrences(const std::string& pattern,
                                                  const std::string& replacement,
                                                  bool matchCase, bool wholeWord) {
@@ -83,7 +88,7 @@ ReplaceResult TextReplace::replaceAllOccurrences(const std::string& pattern,
         return ReplaceResult{validation, 0};
     }
 
-    // Build the result first so Replace All is applied as one edit.
+    // Build the complete result before changing the active document.
     std::size_t total = 0;
     std::string newDocument;
     const std::size_t lines = document_.lineCount();
@@ -91,6 +96,7 @@ ReplaceResult TextReplace::replaceAllOccurrences(const std::string& pattern,
     // Reuse one KMP table for every line.
     const std::vector<std::size_t> lps = TextSearch::buildLpsTable(pattern, matchCase);
 
+    // Build the new document line by line while preserving separators.
     for (std::size_t line = 1; line <= lines; ++line) {
         const std::vector<Match> matches =
             search_.findMatchesInLine(pattern, line, lps, matchCase, wholeWord);
@@ -99,6 +105,7 @@ ReplaceResult TextReplace::replaceAllOccurrences(const std::string& pattern,
             newDocument += oldLine;
         } else {
             std::size_t copied = 0;
+            // Copy each unmatched span, then append its replacement.
             for (const Match& match : matches) {
                 newDocument.append(oldLine, copied, match.column - copied);
                 newDocument += replacement;
@@ -130,6 +137,7 @@ std::string TextReplace::describe(ReplaceStatus status) {
     return "Unknown error.";
 }
 
+// Routes a replacement through EditOperations so it is recorded for undo.
 void TextReplace::applyReplacement(std::size_t lineNumber, std::size_t column,
                                    std::size_t length, const std::string& replacement) {
     if (!editOperations_.replaceText(lineNumber, column, length, replacement)) {

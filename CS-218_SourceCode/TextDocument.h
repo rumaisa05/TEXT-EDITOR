@@ -41,11 +41,15 @@ public:
 
     std::size_t lineCount() const;
     bool isEmpty() const;
+    // Public line numbers start at one; invalid numbers throw out_of_range.
     std::string getLine(std::size_t oneBasedLine) const;
     std::size_t lineLength(std::size_t oneBasedLine) const;
+    // Reconstructs the document with LF separators between lines.
     std::string getAllText() const;
     void clear();
+    // Normalizes line endings and preserves the current document if loading fails.
     void loadText(const std::string& text);
+    // Exchanges ownership of the linked lists in constant time.
     void swap(TextDocument& other) noexcept;
 };
 

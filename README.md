@@ -190,6 +190,10 @@ without a leading zero.
 | `17` | Show line and character counts |
 | `18` | Show all lines with numbers |
 | `19` | Return to Write Mode |
+| `20` | Replace a selected occurrence |
+
+For option **20**, enter the text to find, choose a numbered match from the
+displayed locations, then enter its replacement.
 
 Successful menu actions often return to Write Mode. If the menu is still shown, choose **19**
 when you are ready to write again.

@@ -21,6 +21,7 @@ void UndoStack::dropBottom() noexcept {
 }
 
 bool UndoStack::push(const UndoRecord& record) {
+    // Add the new record at the top, evicting the oldest record when full.
     if (capacity_ == 0) return false;
     StackNode* node = new StackNode(record);   // allocate first: if it throws, nothing changed
     if (size_ >= capacity_) dropBottom();
@@ -95,6 +96,7 @@ bool UndoStack::pushCoalescing(const UndoRecord& record) {
 
 bool UndoStack::pop(UndoRecord& record) {
     if (isEmpty()) return false;
+    // Copy before unlinking so the caller receives the record being removed.
     record = top_->record;
     discardTop();
     return true;
@@ -102,12 +104,14 @@ bool UndoStack::pop(UndoRecord& record) {
 
 bool UndoStack::peek(UndoRecord& record) const {
     if (isEmpty()) return false;
+    // Leave the record in place until the caller confirms its operation succeeded.
     record = top_->record;
     return true;
 }
 
 bool UndoStack::discardTop() noexcept {
     if (isEmpty()) return false;
+    // Remove only the newest record without copying its text.
     StackNode* oldTop = top_;
     top_ = oldTop->next;
     if (top_) top_->prev = nullptr;
@@ -123,6 +127,7 @@ std::size_t UndoStack::size() const { return size_; }
 std::size_t UndoStack::capacity() const { return capacity_; }
 
 void UndoStack::clear() {
+    // Release every node from newest to oldest.
     while (top_) {
         StackNode* oldTop = top_;
         top_ = top_->next;

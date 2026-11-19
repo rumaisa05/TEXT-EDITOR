@@ -11,6 +11,7 @@
 #include <exception>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -29,6 +30,7 @@ const char* const kRed = "\x1b[91m";
 const char* const kDim = "\x1b[2m";
 const char* const kReset = "\x1b[0m";
 
+// Enable ANSI colors only when the current console can display them.
 bool enableConsoleColors() {
 #ifdef _WIN32
     const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -49,6 +51,7 @@ void printMenuSection(const std::string& title) {
     std::cout << '\n' << colorize("  " + title, kCyan) << '\n';
 }
 
+// Print one numbered menu entry and pad it to the shared column width.
 void printMenuOption(int choice, const std::string& label) {
     const std::string number = choice < 10
         ? "0" + std::to_string(choice)
@@ -73,6 +76,7 @@ std::string formatFilename(const std::string& filename) {
     return filename.empty() ? "Untitled" : filename;
 }
 
+// Draw the current document status, a short preview, and available commands.
 void printEditorScreen(const TextDocument& document,
                        const std::string& filename,
                        bool modified) {
@@ -129,9 +133,12 @@ void printEditorScreen(const TextDocument& document,
     printMenuSection("SEARCH & HISTORY");
     printMenuRow(13, "Search", 14, "Replace first");
     printMenuRow(15, "Replace all", 16, "Undo");
+    printMenuOption(20, "Replace specific occurrence");
+    std::cout << '\n';
     std::cout << '\n';
 }
 
+// Read console text and enforce the shared input restrictions.
 bool readAndValidateText(const std::string& prompt, std::string& text) {
     if (!InputValidator::readLine(colorize(prompt, kCyan), text)) return false;
     if (!InputValidator::validateUserInput(text)) {
@@ -141,6 +148,7 @@ bool readAndValidateText(const std::string& prompt, std::string& text) {
     return true;
 }
 
+// Read a one-based line number after checking the console's integer limit.
 bool readLineNumber(const TextDocument& document, const std::string& prompt,
                     int& line) {
     // The console API accepts int values, while document indexes use size_t.
@@ -152,6 +160,7 @@ bool readLineNumber(const TextDocument& document, const std::string& prompt,
         colorize(prompt, kCyan), 1, static_cast<int>(document.lineCount()), line);
 }
 
+// Accepts typed lines and editor commands until the user returns to the menu.
 bool runWritingMode(TextDocument& document, EditOperations& edits,
                     FileManager& files, const std::string& filename,
                     bool& modified) {
@@ -162,6 +171,7 @@ bool runWritingMode(TextDocument& document, EditOperations& edits,
     bool canFillTrailingEmptyLine =
         document.isEmpty() || document.getLine(document.lineCount()).empty();
 
+    // Each iteration reads one line or command and updates the document.
     while (true) {
         std::cout << colorize("  " + std::to_string(document.lineCount()) +
                               " lines  |  " +
@@ -221,6 +231,7 @@ bool runWritingMode(TextDocument& document, EditOperations& edits,
 
 } // namespace
 
+// Initialize the console editor and dispatch menu and writing-mode actions.
 int main() {
 #ifdef _WIN32
     // File names and text are handled as UTF-8 throughout.
@@ -228,6 +239,7 @@ int main() {
     SetConsoleOutputCP(CP_UTF8);
 #endif
     colorsEnabled = enableConsoleColors();
+    // Create shared document services before entering the initial write mode.
     TextDocument document;
     std::string filename;
     bool modified = false;
@@ -255,7 +267,7 @@ int main() {
 
         int choice = 0;
         if (!InputValidator::readIntInRange(
-                colorize("Enter choice > ", kCyan), 0, 19, choice)) {
+                colorize("Enter choice > ", kCyan), 0, 20, choice)) {
             running = false;
             continue;
         }
@@ -435,6 +447,57 @@ int main() {
                         }
                     }
                     break;
+                case 20: {
+                    if (!readAndValidateText("Search text: ", text)) break;
+
+                    // Search once so the user can choose the exact occurrence.
+                    std::vector<Match> matches;
+                    const SearchStatus status = search.searchText(text, matches);
+                    if (status != SearchStatus::Found) {
+                        if (status == SearchStatus::EmptyPattern) {
+                            std::cout << "Error: the search string cannot be empty.\n";
+                        } else if (status == SearchStatus::EmptyDocument) {
+                            std::cout << "Error: the document is empty. Nothing to search.\n";
+                        } else {
+                            std::cout << '"' << text
+                                      << "\" was not found in the document.\n";
+                        }
+                        break;
+                    }
+                    if (matches.size() > static_cast<std::size_t>(INT_MAX)) {
+                        std::cout << "Too many matches to select from in the console.\n";
+                        break;
+                    }
+
+                    std::cout << "Matches:\n";
+                    // Display results in document order with one-based columns.
+                    for (std::size_t i = 0; i < matches.size(); ++i) {
+                        std::cout << "  " << (i + 1) << ". Line "
+                                  << matches[i].line << ", Column "
+                                  << (matches[i].column + 1) << '\n';
+                    }
+
+                    int occurrence = 0;
+                    if (!InputValidator::readIntInRange(
+                            "Occurrence number: ", 1,
+                            static_cast<int>(matches.size()), occurrence) ||
+                        !readAndValidateText("Replacement text: ", secondText)) {
+                        break;
+                    }
+
+                    const ReplaceResult result = replace.replaceOccurrenceAt(
+                        matches[static_cast<std::size_t>(occurrence - 1)],
+                        text, secondText);
+                    if (result.status == ReplaceStatus::Success) {
+                        returnToWriting = true;
+                        if (text != secondText) modified = true;
+                        std::cout << TextReplace::describe(result.status) << " "
+                                  << result.replacements << " occurrence(s).\n";
+                    } else {
+                        std::cout << TextReplace::describe(result.status) << '\n';
+                    }
+                    break;
+                }
                 case 16:
                     succeeded = edits.undoLastOperation();
                     returnToWriting = succeeded;

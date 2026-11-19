@@ -28,6 +28,7 @@ DisplayManager::DisplayManager(const TextDocument& document)
     : document_(document) {}
 
 int DisplayManager::countLines() const {
+    // Guard the conversion because the display API returns int.
     if (document_.lineCount() > static_cast<std::size_t>(INT_MAX)) {
         throw std::overflow_error("DisplayManager::countLines: document too large for an int count");
     }
@@ -35,6 +36,7 @@ int DisplayManager::countLines() const {
 }
 
 int DisplayManager::countCharacters() const {
+    // Count bytes in the flattened text, including line separators.
     const std::string text = document_.getAllText();
     if (text.size() > static_cast<std::size_t>(INT_MAX)) {
         throw std::overflow_error("DisplayManager::countCharacters: document too large for an int count");
@@ -43,6 +45,7 @@ int DisplayManager::countCharacters() const {
 }
 
 void DisplayManager::displayDocument() const {
+    // Add a display-only final newline without changing the document.
     const std::string text = document_.getAllText();
     if (text.empty()) {
         std::cout << "(document is empty)\n";
@@ -54,6 +57,7 @@ void DisplayManager::displayDocument() const {
 }
 
 void DisplayManager::displayLine(int lineNumber) const {
+    // Validate the public one-based line number before accessing the document.
     if (lineNumber < 1 || static_cast<std::size_t>(lineNumber) > document_.lineCount()) {
         std::cout << "Error: invalid line number " << lineNumber
                   << ". Valid range is 1 to " << countLines() << ".\n";
@@ -71,6 +75,7 @@ void DisplayManager::displayAllLines() const {
         finishOutput("displayAllLines");
         return;
     }
+    // Check each write so output failures are reported at the affected line.
     for (std::size_t line = 1; line <= document_.lineCount(); ++line) {
         std::cout << line << ": " << document_.getLine(line) << '\n';
         requireOutputOk("displayAllLines");
@@ -79,6 +84,7 @@ void DisplayManager::displayAllLines() const {
 }
 
 void DisplayManager::displayStatistics() const {
+    // Use the checked counters so oversized values are reported explicitly.
     std::cout << "Lines: " << countLines()
               << ", Characters: " << countCharacters() << '\n';
     finishOutput("displayStatistics");

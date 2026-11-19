@@ -31,6 +31,7 @@ std::string trimFilename(const std::string& text) {
     return text.substr(start, end - start + 1);
 }
 
+// Matches a full filename or its stem using platform-appropriate case rules.
 bool filenamesEqual(const std::filesystem::path& path,
                     const std::string& requestedName) {
 #ifdef _WIN32
@@ -73,6 +74,7 @@ bool isBareFilename(const std::string& name) {
     return path.parent_path().empty();
 }
 
+// Recursively collects matching regular files while skipping inaccessible entries.
 void collectMatches(const std::filesystem::path& root,
                     const std::string& requestedName,
                     std::vector<std::string>& matches,
@@ -95,6 +97,7 @@ void collectMatches(const std::filesystem::path& root,
             if (error) error.clear();
             iterator.increment(error);
         } catch (const std::filesystem::filesystem_error&) {
+            // Continue past entries that disappear or cannot be inspected.
             error.clear();
             iterator.increment(error);
         }
@@ -112,6 +115,7 @@ std::filesystem::path createTempDirectory(const std::string& targetName) {
     std::filesystem::path parent = target.parent_path();
     if (parent.empty()) parent = ".";
 
+    // Retry with fresh names to avoid colliding with another save operation.
     for (unsigned int attempt = 0; attempt < 100; ++attempt) {
         const std::string directoryName =
             ".cs218_editor_tmp_" + std::to_string(nextId.fetch_add(1));
@@ -130,12 +134,14 @@ class TempDirectoryGuard {
 public:
     explicit TempDirectoryGuard(const std::filesystem::path& path)
         : path_(path), armed_(true) {}
+    // Remove incomplete save files unless the caller has committed the save.
     ~TempDirectoryGuard() {
         if (armed_) {
             std::error_code ignored;
             std::filesystem::remove_all(path_, ignored);
         }
     }
+    // Preserve the directory when a failed fallback must keep a backup.
     void disarm() { armed_ = false; }
 private:
     TempDirectoryGuard(const TempDirectoryGuard&);
@@ -208,6 +214,7 @@ bool FileManager::resolveFilename(const std::string& name,
     roots.emplace_back("/");
 #endif
 
+    // Search each available root, limiting results per root to keep selection manageable.
     for (const std::filesystem::path& root : roots) {
         const std::size_t matchesBeforeDrive = matches.size();
         if (std::filesystem::exists(root, error) &&
@@ -346,6 +353,7 @@ void FileManager::writeToDisk(const std::string& name) const {
 
 FileManager::UnsavedChoice FileManager::askUnsavedChoice() const {
     std::string answer;
+    // Keep prompting until the user chooses save, discard, or cancel.
     while (true) {
         std::cout << "You have unsaved changes. (s)ave, (d)iscard, (c)ancel: ";
         if (!readAnswer(answer)) return CHOICE_CANCEL;
@@ -358,6 +366,7 @@ FileManager::UnsavedChoice FileManager::askUnsavedChoice() const {
 }
 
 bool FileManager::saveCurrentDocument() {
+    // An unnamed document must be assigned a path before it can be saved.
     if (filename_.empty()) {
         std::cout << "Enter a filename to save as: ";
         std::string name;
@@ -385,6 +394,7 @@ bool FileManager::resolveUnsavedChanges() {
 }
 
 bool FileManager::createNewDocument(bool resolveChanges) {
+    // Replace the current state only after the user resolves pending edits.
     if (resolveChanges && !resolveUnsavedChanges()) return false;
     TextDocument emptyDocument;
     document_.swap(emptyDocument);
@@ -401,6 +411,7 @@ bool FileManager::createNewDocument(bool resolveChanges) {
 }
 
 bool FileManager::openFile(const std::string& name, bool resolveChanges) {
+    // Load into a candidate document so failures cannot replace current content.
     if (!InputValidator::isValidFilename(name)) {
         std::cout << "Error: filename is invalid.\n";
         return false;
@@ -439,6 +450,7 @@ bool FileManager::openFile(const std::string& name, bool resolveChanges) {
 }
 
 bool FileManager::saveFile() {
+    // Keep the modified flag set if writing the current file throws.
     if (!fileOpen_) {
         throw std::logic_error("FileManager::saveFile: no document is open");
     }
@@ -453,6 +465,7 @@ bool FileManager::saveFile() {
 }
 
 bool FileManager::saveAs(const std::string& newName, bool confirmOverwrite) {
+    // Adopt the new path only after the content has been written successfully.
     if (!fileOpen_) {
         throw std::logic_error("FileManager::saveAs: no document is open");
     }
@@ -488,6 +501,7 @@ bool FileManager::saveAs(const std::string& newName, bool confirmOverwrite) {
 }
 
 bool FileManager::closeFile() {
+    // Resolve pending edits before discarding the active document.
     if (!fileOpen_) {
         throw std::logic_error("FileManager::closeFile: no document is open");
     }

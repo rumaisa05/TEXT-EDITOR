@@ -22,6 +22,7 @@ namespace {
 int passed = 0;
 int failed = 0;
 
+// Record one test result and print its identifier for the test report.
 void check(const std::string& id, bool condition) {
     if (condition) {
         ++passed;
@@ -32,6 +33,7 @@ void check(const std::string& id, bool condition) {
     }
 }
 
+// Check whether the search result list contains a specific location.
 bool hasMatch(const std::vector<Match>& matches, std::size_t line,
               std::size_t column) {
     for (const Match& match : matches) {
@@ -42,12 +44,14 @@ bool hasMatch(const std::vector<Match>& matches, std::size_t line,
 
 class ConsoleRedirect {
 public:
+    // Redirect both standard streams so console behavior can be tested directly.
     explicit ConsoleRedirect(const std::string& input = "")
         : input_(input),
           output_(),
           oldInput_(std::cin.rdbuf(input_.rdbuf())),
           oldOutput_(std::cout.rdbuf(output_.rdbuf())) {}
 
+    // Restore the process streams so later tests use the real console.
     ~ConsoleRedirect() {
         std::cin.rdbuf(oldInput_);
         std::cout.rdbuf(oldOutput_);
@@ -66,11 +70,13 @@ private:
 
 class TemporaryDirectory {
 public:
+    // Create a unique temporary directory for isolated filesystem tests.
     TemporaryDirectory() {
         static unsigned long long sequence = 0;
         const auto stamp = std::chrono::steady_clock::now()
                                .time_since_epoch().count();
         const std::filesystem::path base = std::filesystem::temp_directory_path();
+        // Use a new suffix on each attempt to avoid shared test paths.
         for (int attempt = 0; attempt < 100; ++attempt) {
             path_ = base / ("cs218_editor_tests_" + std::to_string(stamp) +
                             "_" + std::to_string(sequence++));
@@ -84,11 +90,13 @@ public:
         throw std::runtime_error("could not create a unique test directory");
     }
 
+    // Remove this test's files without affecting other temporary directories.
     ~TemporaryDirectory() {
         std::error_code ignored;
         std::filesystem::remove_all(path_, ignored);
     }
 
+    // Build a platform-correct path from a UTF-8 test filename.
     std::string file(const std::string& name) const {
         return (path_ / pathFromUtf8(name)).u8string();
     }
@@ -97,18 +105,21 @@ private:
     std::filesystem::path path_;
 };
 
+// Write exact bytes so file tests are independent of text-mode conversions.
 bool writeFile(const std::string& filename, const std::string& content) {
     std::ofstream output(pathFromUtf8(filename), std::ios::binary);
     output.write(content.data(), static_cast<std::streamsize>(content.size()));
     return static_cast<bool>(output);
 }
 
+// Read the complete file as bytes for exact save-result comparisons.
 std::string readFile(const std::string& filename) {
     std::ifstream input(pathFromUtf8(filename), std::ios::binary);
     return std::string(std::istreambuf_iterator<char>(input),
                        std::istreambuf_iterator<char>());
 }
 
+// Exercise file creation, loading, saving, closing, and unsaved-change choices.
 void testFileOperations() {
     TemporaryDirectory directory;
     const std::string source = directory.file("source.txt");
@@ -189,6 +200,7 @@ void testFileOperations() {
     check("FILE-11 reject an invalid filename", invalidPathRejected);
 }
 
+// Verify document display output and invalid-line reporting.
 void testTextDisplay() {
     TextDocument document;
     document.loadText("one\ntwo");
@@ -216,6 +228,7 @@ void testTextDisplay() {
 }
 
 int main() {
+    // Run backend, search, replacement, undo, file, display, and input checks.
     TextDocument document;
     check("DOC-01 new document starts with one empty line",
           document.lineCount() == 1 && document.isEmpty());
@@ -358,10 +371,12 @@ int main() {
 
     int choice = -1;
     check("INPUT-01 accept valid menu choices and reject invalid ones",
-          InputValidator::validateMenuChoice("19", 0, 19, choice) &&
+          InputValidator::validateMenuChoice("19", 0, 20, choice) &&
               choice == 19 &&
-              !InputValidator::validateMenuChoice("abc", 0, 19, choice) &&
-              !InputValidator::validateMenuChoice("20", 0, 19, choice));
+              InputValidator::validateMenuChoice("20", 0, 20, choice) &&
+              choice == 20 &&
+              !InputValidator::validateMenuChoice("abc", 0, 20, choice) &&
+              !InputValidator::validateMenuChoice("21", 0, 20, choice));
     check("INPUT-02 validate line, position, and filename boundaries",
           InputValidator::isValidLineNumber(1, 3) &&
               !InputValidator::isValidLineNumber(0, 3) &&

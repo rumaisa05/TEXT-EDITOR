@@ -53,15 +53,21 @@ public:
     UndoStack(const UndoStack&) = delete;
     UndoStack& operator=(const UndoStack&) = delete;
 
+    // Adds a record and evicts the oldest one if the stack is full.
     bool push(const UndoRecord& record);
+    // Merges compatible adjacent edits or pushes a separate record.
     bool pushCoalescing(const UndoRecord& record);
+    // Copies and removes the newest record.
     bool pop(UndoRecord& record);
+    // Copies the newest record without removing it.
     bool peek(UndoRecord& record) const;
+    // Removes the newest record after its inverse has succeeded.
     bool discardTop() noexcept;
     bool isEmpty() const;
     bool isFull() const;
     std::size_t size() const;
     std::size_t capacity() const;
+    // Releases all records and resets the stack.
     void clear();
 };
 

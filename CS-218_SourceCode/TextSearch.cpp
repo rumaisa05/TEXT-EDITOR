@@ -13,6 +13,7 @@ unsigned char fold(char c, bool matchCase) {
 }
 
 bool isWordByte(char c) {
+    // Treat all non-ASCII UTF-8 bytes as word content for boundary checks.
     const unsigned char u = static_cast<unsigned char>(c);
     return u >= 0x80 || std::isalnum(u) || u == '_';
 }
@@ -43,6 +44,7 @@ void scanLine(const std::string& text, const std::string& pattern,
     std::size_t matched = 0;
     for (std::size_t i = 0; i < text.size(); ++i) {
         while (matched > 0 && fold(text[i], matchCase) != fold(pattern[matched], matchCase)) {
+            // Fall back to the longest prefix that can still match this suffix.
             matched = lps[matched - 1];
         }
         if (fold(text[i], matchCase) == fold(pattern[matched], matchCase)) {
@@ -83,6 +85,7 @@ SearchStatus TextSearch::searchText(const std::string& pattern, std::vector<Matc
         return SearchStatus::EmptyDocument;
     }
 
+    // Reuse one pattern table while scanning every line.
     const std::vector<std::size_t> lps = buildLpsTable(pattern, matchCase);
     const std::size_t lines = document_.lineCount();
     std::vector<std::size_t> columns;
@@ -100,6 +103,7 @@ bool TextSearch::findFirstOccurrence(const std::string& pattern, Match& first,
         return false;
     }
 
+    // Stop at the first accepted match while reusing the pattern's LPS table.
     const std::vector<std::size_t> lps = buildLpsTable(pattern, matchCase);
     const std::size_t lines = document_.lineCount();
     std::vector<std::size_t> columns;
@@ -116,23 +120,27 @@ bool TextSearch::findFirstOccurrence(const std::string& pattern, Match& first,
 
 std::vector<Match> TextSearch::findAllOccurrences(const std::string& pattern,
                                                   bool matchCase, bool wholeWord) const {
+    // Return the common search results without exposing a status value.
     std::vector<Match> results;
     searchText(pattern, results, matchCase, wholeWord);
     return results;
 }
 
 bool TextSearch::isSearchStringPresent(const std::string& pattern) const {
+    // Use the early-exit search path when only presence matters.
     Match unused{0, 0};
     return findFirstOccurrence(pattern, unused);
 }
 
 std::vector<std::size_t> TextSearch::buildLpsTable(const std::string& pattern,
                                                        bool matchCase) {
+    // Expose KMP preprocessing so callers can share it across lines.
     return buildFailureTableImpl(pattern, matchCase);
 }
 
 std::vector<Match> TextSearch::findMatchesInLine(const std::string& pattern, std::size_t lineNumber,
                                                  bool matchCase, bool wholeWord) const {
+    // Build the pattern table once, then delegate to the validated overload.
     if (InputValidator::isSearchStringEmpty(pattern)) return {};
     const std::vector<std::size_t> lps = buildLpsTable(pattern, matchCase);
     return findMatchesInLine(pattern, lineNumber, lps, matchCase, wholeWord);
@@ -141,6 +149,7 @@ std::vector<Match> TextSearch::findMatchesInLine(const std::string& pattern, std
 std::vector<Match> TextSearch::findMatchesInLine(const std::string& pattern, std::size_t lineNumber,
                                                  const std::vector<std::size_t>& lps,
                                                  bool matchCase, bool wholeWord) const {
+    // Validate the supplied table and line before scanning this single line.
     std::vector<Match> matches;
     if (InputValidator::isSearchStringEmpty(pattern) || lps.size() != pattern.size() ||
         !InputValidator::isValidLineNumber(lineNumber, document_.lineCount())) {
@@ -153,6 +162,7 @@ std::vector<Match> TextSearch::findMatchesInLine(const std::string& pattern, std
 }
 
 void TextSearch::displaySearchResults(const std::string& pattern) const {
+    // Translate search statuses and byte columns into console messages.
     std::vector<Match> results;
     switch (searchText(pattern, results)) {
         case SearchStatus::EmptyPattern:

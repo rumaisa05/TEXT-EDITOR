@@ -32,8 +32,10 @@ public:
     std::size_t countOccurrences(const std::string& pattern,
                                  bool matchCase = true, bool wholeWord = false) const;
 
+    // Replaces the first matching pattern in document order.
     ReplaceResult replaceFirstOccurrence(const std::string& pattern, const std::string& replacement);
 
+    // Replaces a match only if the expected pattern remains at that location.
     ReplaceResult replaceOccurrenceAt(const Match& location, const std::string& pattern,
                                       const std::string& replacement);
 

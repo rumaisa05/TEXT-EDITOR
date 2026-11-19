@@ -24,9 +24,11 @@ class TextSearch {
 public:
     explicit TextSearch(const TextDocument& document);
 
+    // Clears results, validates inputs, and returns all matching byte locations.
     SearchStatus searchText(const std::string& pattern, std::vector<Match>& results,
                             bool matchCase = true, bool wholeWord = false) const;
 
+    // Stops at the first accepted match in document order.
     bool findFirstOccurrence(const std::string& pattern, Match& first,
                              bool matchCase = true, bool wholeWord = false) const;
 
@@ -38,6 +40,7 @@ public:
     std::vector<Match> findMatchesInLine(const std::string& pattern, std::size_t lineNumber,
                                          bool matchCase = true, bool wholeWord = false) const;
 
+    // Builds the KMP prefix table for reuse when scanning multiple lines.
     static std::vector<std::size_t> buildLpsTable(const std::string& pattern,
                                                   bool matchCase = true);
 
