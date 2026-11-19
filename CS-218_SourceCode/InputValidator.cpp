@@ -10,7 +10,7 @@
 
 namespace {
 
-// Keep console input and file names within portable, predictable limits.
+// Keep input and file names within portable limits.
 const std::size_t kMaxFilenameLength = 255;
 const std::size_t kMaxInputLength = 1024;
 const char* const kInvalidFilenameChars = "<>\"|?*";
@@ -66,8 +66,7 @@ bool parseInteger(const std::string& text, int minValue, int maxValue, int& valu
     int parsed = 0;
     const char* begin = trimmed.c_str();
     const char* end = begin + trimmed.size();
-    // from_chars requires consuming the whole trimmed string, rejecting inputs
-    // such as "12xyz" instead of accepting their numeric prefix.
+    // Require the whole input to be an integer (for example, reject "12xyz").
     const auto [ptr, ec] = std::from_chars(begin, end, parsed);
 
     if (ec != std::errc() || ptr != end) {
@@ -88,7 +87,7 @@ bool InputValidator::isValidLineNumber(std::size_t lineNumber, std::size_t lineC
 }
 
 bool InputValidator::isValidPosition(std::size_t column, std::size_t lineLength) {
-    // A position equal to lineLength is valid: it is the end-of-line insertion point.
+    // Allow the end of the line as an insertion position.
     return column <= lineLength;
 }
 
@@ -97,8 +96,7 @@ bool InputValidator::isValidRange(std::size_t startColumn, std::size_t endColumn
 }
 
 bool InputValidator::isSearchStringEmpty(const std::string& pattern) {
-    // Only a truly empty pattern is invalid: spaces are legitimate search text
-    // (for example, replacing double spaces with a single one).
+    // Spaces are valid search text; only an empty pattern is invalid.
     return pattern.empty();
 }
 
@@ -124,7 +122,7 @@ bool InputValidator::isValidFilename(const std::string& filename) {
         return false;
     }
 
-    // Parse drive, UNC, and rooted path prefixes before validating components.
+    // Skip the drive or root prefix while validating path components.
     std::size_t start = 0;
     const bool hasDrivePrefix = normalized.size() >= 2 && normalized[1] == ':' &&
                                 std::isalpha(static_cast<unsigned char>(normalized[0]));
@@ -161,8 +159,7 @@ bool InputValidator::isValidFilename(const std::string& filename) {
             return false;
         }
         if (component == "." || component == "..") {
-            // Relative steps such as "../notes.txt" are fine; the LAST component
-            // must be a real file name, not "." or "..".
+            // Allow "." and ".." only as intermediate path components.
             if (last == std::string::npos) return false;
             ++componentCount;
             first = last + 1;
@@ -218,7 +215,7 @@ bool InputValidator::validateUserInput(const std::string& input) {
 bool InputValidator::readLine(const std::string& prompt, std::string& line) {
     std::cout << prompt;
     if (!std::getline(std::cin, line)) {
-        return false; // EOF or stream error: caller should exit gracefully
+        return false;
     }
     if (!line.empty() && line.back() == '\r') {
         line.pop_back();
@@ -228,7 +225,7 @@ bool InputValidator::readLine(const std::string& prompt, std::string& line) {
 
 bool InputValidator::readIntInRange(const std::string& prompt, int minValue, int maxValue, int& value) {
     std::string line;
-    // Bound retries so invalid input cannot trap the caller in an endless prompt.
+    // Limit retries so invalid input cannot trap the caller in a prompt.
     constexpr int kMaxAttempts = 5;
 
     for (int attempts = 0; attempts < kMaxAttempts; ++attempts) {

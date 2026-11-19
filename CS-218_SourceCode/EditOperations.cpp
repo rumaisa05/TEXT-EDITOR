@@ -9,13 +9,11 @@
 #include <vector>
 
 namespace {
-// UTF-8 continuation bytes are not valid character-start edit positions.
 bool isContinuationByte(char c) {
     return (static_cast<unsigned char>(c) & 0xC0u) == 0x80u;
 }
 
-// A byte offset is valid when it points to the end of the string or to
-// the first byte of a UTF-8 code point (not to a continuation byte).
+// Reject offsets that point inside a UTF-8 character.
 bool isValidUtf8Boundary(const std::string& text, std::size_t position) {
     return position <= text.size() &&
            (position == text.size() || !isContinuationByte(text[position]));
@@ -35,7 +33,7 @@ void EditOperations::insertTextRaw(std::size_t line, std::size_t position,
         throw std::length_error("Inserted text is too large.");
     }
 
-    // Build a replacement buffer before releasing the old one.
+    // Allocate and fill the new buffer before releasing the old one.
     const std::size_t newLength = node->length + text.size();
     char* newData = new char[newLength + 1];
     std::copy(node->data, node->data + position, newData);
@@ -90,13 +88,12 @@ bool EditOperations::insertCharacter(std::size_t line, std::size_t position, cha
     return insertText(line, position, std::string(1, ch));
 }
 
-// Deletes one whole character. The document stores UTF-8 bytes, so a character
-// may be several bytes long: removing just one byte would corrupt the text.
+// Delete the full UTF-8 character, not just its first byte.
 bool EditOperations::deleteCharacter(std::size_t line, std::size_t position) {
     if (line == 0 || line > document_.lineCount()) return false;
     const std::string text = document_.getLine(line);
     if (position >= text.size()) return false;
-    if (isContinuationByte(text[position])) return false;   // not at a character boundary
+    if (isContinuationByte(text[position])) return false;
     std::size_t length = 1;
     while (position + length < text.size() && isContinuationByte(text[position + length])) {
         ++length;
@@ -109,7 +106,7 @@ bool EditOperations::deleteWord(std::size_t line, std::size_t position) {
 
     const std::string text = document_.getLine(line);
     if (position >= text.size() || !isValidUtf8Boundary(text, position)) return false;
-    // Delete the whitespace at the cursor and the following word as one edit.
+    // Include whitespace at the cursor and the following word.
     std::size_t end = position;
     while (end < text.size() &&
            std::isspace(static_cast<unsigned char>(text[end]))) {
@@ -237,7 +234,7 @@ bool EditOperations::replaceText(std::size_t line, std::size_t position,
 }
 
 bool EditOperations::replaceDocumentText(const std::string& rawText, bool coalesceLocalEdit) {
-    // The document never stores '\r', so normalise line endings first.
+    // Normalize line endings before comparing the documents.
     std::string text;
     text.reserve(rawText.size());
     for (std::size_t i = 0; i < rawText.size(); ++i) {
@@ -252,13 +249,13 @@ bool EditOperations::replaceDocumentText(const std::string& rawText, bool coales
     const std::string oldText = document_.getAllText();
     if (text == oldText) return false;
 
-    // Store only the changed span, not two full document snapshots.
+    // Record only the changed span instead of both full documents.
     std::size_t prefix = 0;
     const std::size_t sharedLimit = std::min(oldText.size(), text.size());
     while (prefix < sharedLimit && oldText[prefix] == text[prefix]) {
         ++prefix;
     }
-    // Never start the changed region in the middle of a multi-byte UTF-8 character.
+    // Extend the changed span to UTF-8 character boundaries.
     while (prefix > 0 &&
            ((prefix < oldText.size() && isContinuationByte(oldText[prefix])) ||
             (prefix < text.size() && isContinuationByte(text[prefix])))) {
@@ -272,7 +269,6 @@ bool EditOperations::replaceDocumentText(const std::string& rawText, bool coales
         --oldEnd;
         --newEnd;
     }
-    // ... and never end it in the middle of one either.
     while ((oldEnd < oldText.size() && isContinuationByte(oldText[oldEnd])) ||
            (newEnd < text.size() && isContinuationByte(text[newEnd]))) {
         if (oldEnd < oldText.size()) ++oldEnd;
@@ -345,8 +341,7 @@ bool EditOperations::replaceDocumentText(const std::string& rawText, bool coales
         }
     }
 
-    // Multi-line change: remember only the changed region (and where it starts
-    // in the whole text) instead of a full copy of the document.
+    // Store the changed span and its document-wide offset for undo.
     if (!undoStack_.push(UndoRecord(EditType::ReplaceDocument, 0, prefix,
                                     removed, inserted))) {
         return false;
@@ -361,7 +356,6 @@ bool EditOperations::replaceDocumentText(const std::string& rawText, bool coales
 }
 
 void EditOperations::applyUndo(const UndoRecord& record) {
-    // Reconstruct the document by applying the inverse described by the record.
     switch (record.type) {
         case EditType::InsertText:
             deleteRangeRaw(record.line, record.position, record.newText.size());
@@ -466,7 +460,7 @@ void EditOperations::applyUndo(const UndoRecord& record) {
 bool EditOperations::undoLastOperation() {
     UndoRecord record;
     if (!undoStack_.peek(record)) return false;
-    // Keep the record until reversal succeeds, so failed undo can be retried.
+    // Remove the undo record only after the reversal succeeds.
     applyUndo(record);
     undoStack_.discardTop();
     return true;

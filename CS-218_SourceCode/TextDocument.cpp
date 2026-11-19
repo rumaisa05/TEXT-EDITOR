@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <limits>
 
-// Owns and grows the byte buffer for one linked-list line.
+// Manages the growable buffer for one line.
 TextDocument::LineNode::LineNode(const std::string& text)
     : data(nullptr), length(0), capacity(0), prev(nullptr), next(nullptr) {
     setText(text);
@@ -12,7 +12,7 @@ TextDocument::LineNode::LineNode(const std::string& text)
 TextDocument::LineNode::~LineNode() { delete[] data; }
 
 void TextDocument::LineNode::setText(const std::string& text) {
-    // Reserve room for the terminating null byte and grow geometrically as needed.
+    // Include the null terminator and grow the buffer when needed.
     if (text.size() == std::numeric_limits<std::size_t>::max()) {
         throw std::length_error("Line text is too large.");
     }
@@ -45,15 +45,14 @@ TextDocument::~TextDocument() { clear(); }
 
 std::size_t TextDocument::lineCount() const { return lineCount_; }
 
-// True only for a document with no text at all (a single empty line).
-// Several blank lines ARE content: they can be searched, deleted and saved.
+// Blank lines count as content; one empty line is an empty document.
 bool TextDocument::isEmpty() const {
     return lineCount_ == 0 || (lineCount_ == 1 && head_->length == 0);
 }
 
 TextDocument::LineNode* TextDocument::nodeAt(std::size_t index) const {
     if (index >= lineCount_) throw std::out_of_range("Line number is out of range.");
-    // Start from whichever end of the list is closer to avoid needless traversal.
+    // Start from the closer end of the list.
     if (index < lineCount_ / 2) {
         LineNode* p = head_;
         for (std::size_t i = 0; i < index; ++i) p = p->next;
@@ -77,7 +76,7 @@ std::size_t TextDocument::lineLength(std::size_t oneBasedLine) const {
 
 std::string TextDocument::getAllText() const {
     std::string result;
-    // Reserve once for all line contents plus their separating newlines.
+    // Reserve space for the text and separating newlines.
     std::size_t totalLength = lineCount_ == 0 ? 0 : lineCount_ - 1;
     for (LineNode* p = head_; p; p = p->next) {
         if (p->length > std::numeric_limits<std::size_t>::max() - totalLength) {
@@ -101,7 +100,6 @@ void TextDocument::insertLineRaw(std::size_t index, const std::string& text) {
     if (lineCount_ == std::numeric_limits<std::size_t>::max()) {
         throw std::length_error("Document has too many lines.");
     }
-    // Link the new node at the head, tail, or requested interior position.
     LineNode* n = new LineNode(text);
     if (lineCount_ == 0) {
         head_ = tail_ = n;
@@ -132,7 +130,7 @@ std::string TextDocument::deleteLineRaw(std::size_t index) {
 
 void TextDocument::removeLineRaw(std::size_t index) {
     LineNode* n = nodeAt(index);
-    // Keep one empty line when the user deletes the document's only line.
+    // Keep one empty line so the document remains editable.
     if (lineCount_ == 1) {
         n->setText("");
         return;
@@ -155,8 +153,7 @@ void TextDocument::clear() {
 }
 
 void TextDocument::loadText(const std::string& text) {
-    // Normalize all supported newline forms before splitting so the internal
-    // representation always uses '\n' between lines.
+    // Normalize CRLF and CR to '\n' before splitting into lines.
     std::string normalized;
     normalized.reserve(text.size());
     for (std::size_t i = 0; i < text.size(); ++i) {
@@ -170,8 +167,7 @@ void TextDocument::loadText(const std::string& text) {
         }
     }
 
-    // Build separately, then swap only after parsing succeeds to keep the
-    // original document intact if allocation fails.
+    // Keep the current document intact if parsing fails.
     TextDocument parsed;
     parsed.clear();
     std::size_t start = 0;

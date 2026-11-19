@@ -1,22 +1,28 @@
-#include "TextDocument.h"
+#include "DisplayManager.h"
 #include "EditOperations.h"
-#include "TextSearch.h"
-#include "TextReplace.h"
-#include "UndoStack.h"
+#include "FileManager.h"
 #include "InputValidator.h"
+#include "PathUtil.h"
+#include "TextDocument.h"
+#include "TextReplace.h"
+#include "TextSearch.h"
+#include "UndoStack.h"
 
+#include <chrono>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <sstream>
 #include <string>
 #include <vector>
 
-// Small self-contained regression suite for the editor's backend components.
 namespace {
 int passed = 0;
 int failed = 0;
 
 void check(const std::string& id, bool condition) {
-    // Keep running after failures so one test run reports all regressions.
     if (condition) {
         ++passed;
         std::cout << "[PASS] " << id << '\n';
@@ -26,116 +32,356 @@ void check(const std::string& id, bool condition) {
     }
 }
 
-bool hasMatch(const std::vector<Match>& matches, std::size_t line, std::size_t column) {
-    // Search coordinates are deliberately checked as exact line/byte pairs.
-    for (const Match& m : matches)
-        if (m.line == line && m.column == column) return true;
+bool hasMatch(const std::vector<Match>& matches, std::size_t line,
+              std::size_t column) {
+    for (const Match& match : matches) {
+        if (match.line == line && match.column == column) return true;
+    }
     return false;
+}
+
+class ConsoleRedirect {
+public:
+    explicit ConsoleRedirect(const std::string& input = "")
+        : input_(input),
+          output_(),
+          oldInput_(std::cin.rdbuf(input_.rdbuf())),
+          oldOutput_(std::cout.rdbuf(output_.rdbuf())) {}
+
+    ~ConsoleRedirect() {
+        std::cin.rdbuf(oldInput_);
+        std::cout.rdbuf(oldOutput_);
+        std::cin.clear();
+        std::cout.clear();
+    }
+
+    std::string output() const { return output_.str(); }
+
+private:
+    std::istringstream input_;
+    std::ostringstream output_;
+    std::streambuf* oldInput_;
+    std::streambuf* oldOutput_;
+};
+
+class TemporaryDirectory {
+public:
+    TemporaryDirectory() {
+        static unsigned long long sequence = 0;
+        const auto stamp = std::chrono::steady_clock::now()
+                               .time_since_epoch().count();
+        const std::filesystem::path base = std::filesystem::temp_directory_path();
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            path_ = base / ("cs218_editor_tests_" + std::to_string(stamp) +
+                            "_" + std::to_string(sequence++));
+            std::error_code error;
+            if (std::filesystem::create_directory(path_, error)) return;
+            if (error && error != std::errc::file_exists) {
+                throw std::filesystem::filesystem_error(
+                    "could not create test directory", path_, error);
+            }
+        }
+        throw std::runtime_error("could not create a unique test directory");
+    }
+
+    ~TemporaryDirectory() {
+        std::error_code ignored;
+        std::filesystem::remove_all(path_, ignored);
+    }
+
+    std::string file(const std::string& name) const {
+        return (path_ / pathFromUtf8(name)).u8string();
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+bool writeFile(const std::string& filename, const std::string& content) {
+    std::ofstream output(pathFromUtf8(filename), std::ios::binary);
+    output.write(content.data(), static_cast<std::streamsize>(content.size()));
+    return static_cast<bool>(output);
+}
+
+std::string readFile(const std::string& filename) {
+    std::ifstream input(pathFromUtf8(filename), std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(input),
+                       std::istreambuf_iterator<char>());
+}
+
+void testFileOperations() {
+    TemporaryDirectory directory;
+    const std::string source = directory.file("source.txt");
+    const std::string renamed = directory.file("renamed.txt");
+    const std::string missing = directory.file("missing.txt");
+    bool created = false;
+    bool unnamedSaveRejected = false;
+    bool opened = false;
+    bool missingRejected = false;
+    bool missingPreservedDocument = false;
+    bool savedCurrentFile = false;
+    bool savedAs = false;
+    bool exitSaveWorked = false;
+    bool exitCancelPreservedChanges = false;
+    bool exitDiscardWorked = false;
+    bool closed = false;
+    bool invalidPathRejected = false;
+
+    {
+        ConsoleRedirect console("s\nc\nd\n");
+        TextDocument document;
+        std::string filename;
+        bool modified = false;
+        FileManager files(document, filename, modified);
+
+        created = files.createNewDocument() && files.isFileOpen() &&
+                  document.isEmpty();
+        unnamedSaveRejected = !files.saveFile();
+        const bool sourceWritten = writeFile(source, "original");
+        opened = sourceWritten && files.openFile(source, false) &&
+                 document.getAllText() == "original" && filename == source;
+
+        missingRejected = !files.openFile(missing, false);
+        missingPreservedDocument = document.getAllText() == "original" &&
+                                   filename == source;
+
+        document.loadText("saved");
+        modified = true;
+        savedCurrentFile = files.saveFile() && readFile(source) == "saved" &&
+                           !files.isModified();
+
+        document.loadText("renamed content");
+        modified = true;
+        savedAs = files.saveAs(renamed, false) && filename == renamed &&
+                  readFile(renamed) == "renamed content" &&
+                  !files.isModified();
+
+        document.loadText("save on exit");
+        modified = true;
+        exitSaveWorked = files.resolveUnsavedChanges() &&
+                         readFile(renamed) == "save on exit" &&
+                         !files.isModified();
+
+        document.loadText("pending edit");
+        modified = true;
+        exitCancelPreservedChanges = !files.resolveUnsavedChanges() &&
+                                     files.isModified() &&
+                                     document.getAllText() == "pending edit";
+        exitDiscardWorked = files.resolveUnsavedChanges() &&
+                            !files.isModified() &&
+                            document.getAllText() == "pending edit";
+
+        closed = files.closeFile() && !files.isFileOpen();
+        invalidPathRejected = !files.openFile("invalid?.txt", false);
+    }
+
+    check("FILE-01 create a new open document", created);
+    check("FILE-02 reject Save before a filename is assigned", unnamedSaveRejected);
+    check("FILE-03 open an existing file", opened);
+    check("FILE-04 reject a missing file without replacing the document",
+          missingRejected && missingPreservedDocument);
+    check("FILE-05 save changes to the current file", savedCurrentFile);
+    check("FILE-06 Save As writes to and adopts the new filename", savedAs);
+    check("FILE-07 resolve exit by saving changes", exitSaveWorked);
+    check("FILE-08 cancel exit without losing edits", exitCancelPreservedChanges);
+    check("FILE-09 discard exit changes", exitDiscardWorked);
+    check("FILE-10 close a document", closed);
+    check("FILE-11 reject an invalid filename", invalidPathRejected);
+}
+
+void testTextDisplay() {
+    TextDocument document;
+    document.loadText("one\ntwo");
+    DisplayManager display(document);
+    std::string output;
+    {
+        ConsoleRedirect console;
+        display.displayDocument();
+        display.displayLine(2);
+        display.displayAllLines();
+        display.displayStatistics();
+        display.displayLine(3);
+        output = console.output();
+    }
+
+    check("DISPLAY-01 show all document text",
+          output.find("one\ntwo\n") != std::string::npos);
+    check("DISPLAY-02 show individual and numbered lines",
+          output.find("2: two\n") != std::string::npos &&
+              output.find("1: one\n2: two\n") != std::string::npos);
+    check("DISPLAY-03 report line/character counts and invalid lines",
+          output.find("Lines: 2, Characters: 7\n") != std::string::npos &&
+              output.find("Error: invalid line number 3.") != std::string::npos);
 }
 }
 
 int main() {
-    // TextDocument construction, loading and line access.
-    TextDocument doc;
-    check("TD-01 constructor creates one empty line", doc.lineCount() == 1 && doc.isEmpty());
-    check("TD-02 empty line can be read", doc.getLine(1).empty());
-    doc.loadText("the cat sat on the mat\nThe Cat\nconcatenate cat");
-    check("TD-03 loadText creates three lines", doc.lineCount() == 3);
-    check("TD-04 getLine uses one-based line numbers", doc.getLine(2) == "The Cat");
-    check("TD-05 getAllText preserves line separators",
-          doc.getAllText() == "the cat sat on the mat\nThe Cat\nconcatenate cat");
-    doc.loadText("a\nb\n");
-    check("TD-06 trailing newline creates final empty line",
-          doc.lineCount() == 3 && doc.getLine(3).empty());
+    TextDocument document;
+    check("DOC-01 new document starts with one empty line",
+          document.lineCount() == 1 && document.isEmpty());
+    document.loadText("a\r\nb\r");
+    check("DOC-02 normalize CRLF/CR and preserve a trailing newline",
+          document.lineCount() == 3 && document.getAllText() == "a\nb\n" &&
+              document.getLine(3).empty());
 
-    // Editing and undo.
-    TextDocument editDoc;
-    editDoc.loadText("hello world");
-    EditOperations edit(editDoc, 100);
-    check("ED-01 insert text at valid position", edit.insertText(1, 5, ",") && editDoc.getLine(1) == "hello, world");
-    check("ED-02 undo insertion", edit.undoLastOperation() && editDoc.getLine(1) == "hello world");
-    check("ED-03 delete range", edit.deleteRange(1, 0, 6) && editDoc.getLine(1) == "world");
-    check("ED-04 undo deletion", edit.undoLastOperation() && editDoc.getLine(1) == "hello world");
-    check("ED-05 insert at end of line", edit.insertText(1, 11, "!") && editDoc.getLine(1) == "hello world!");
-    check("ED-06 reject insertion beyond end", !edit.insertText(1, 99, "x") && editDoc.getLine(1) == "hello world!");
-    check("ED-07 reject empty insertion", !edit.insertText(1, 0, ""));
-    check("ED-08 reject line break in single-line insertion", !edit.insertText(1, 0, "x\ny"));
-    check("ED-09 reject invalid line number", !edit.insertText(0, 0, "x"));
-    check("ED-10 delete character", edit.deleteCharacter(1, 11) && editDoc.getLine(1) == "hello world");
-    check("ED-11 undo character deletion", edit.undoLastOperation() && editDoc.getLine(1) == "hello world!");
-    check("ED-12 insert line", edit.insertLine(2, "second") && editDoc.lineCount() == 2 && editDoc.getLine(2) == "second");
-    check("ED-13 delete line", edit.deleteLine(2) && editDoc.lineCount() == 1);
-    check("ED-14 undo line deletion", edit.undoLastOperation() && editDoc.lineCount() == 2 && editDoc.getLine(2) == "second");
-    check("ED-15 delete line range", edit.deleteLineRange(1, 2) && editDoc.lineCount() == 1 && editDoc.getLine(1).empty());
-    check("ED-16 undo deleted line range", edit.undoLastOperation() && editDoc.lineCount() == 2 && editDoc.getLine(1) == "hello world!");
-    check("ED-17 replace text", edit.replaceText(1, 0, 5, "HELLO") && editDoc.getLine(1) == "HELLO world!");
-    check("ED-18 undo replacement", edit.undoLastOperation() && editDoc.getLine(1) == "hello world!");
-    check("ED-19 undo empty history returns false", (edit.clearUndoHistory(), !edit.undoLastOperation()));
+    TextDocument editDocument;
+    editDocument.loadText("cat sat");
+    EditOperations edits(editDocument);
+    check("EDIT-01 insert text at a valid position",
+          edits.insertText(1, 3, ",") &&
+              editDocument.getLine(1) == "cat, sat");
+    check("EDIT-02 undo text insertion",
+          edits.undoLastOperation() && editDocument.getLine(1) == "cat sat");
+    check("EDIT-03 reject out-of-range insertion without changing text",
+          !edits.insertText(1, 99, "x") &&
+              editDocument.getLine(1) == "cat sat");
+    check("EDIT-04 delete a character and undo it",
+          edits.deleteCharacter(1, 0) &&
+              editDocument.getLine(1) == "at sat" &&
+              edits.undoLastOperation() &&
+              editDocument.getLine(1) == "cat sat");
+    check("EDIT-05 delete a word and undo it",
+          edits.deleteWord(1, 3) && editDocument.getLine(1) == "cat" &&
+              edits.undoLastOperation() &&
+              editDocument.getLine(1) == "cat sat");
+    check("EDIT-06 delete a range and undo it",
+          edits.deleteRange(1, 4, 3) && editDocument.getLine(1) == "cat " &&
+              edits.undoLastOperation() &&
+              editDocument.getLine(1) == "cat sat");
+    check("EDIT-07 reject an invalid deletion range",
+          !edits.deleteRange(1, 6, 3) &&
+              editDocument.getLine(1) == "cat sat");
+    check("EDIT-08 insert and undo a line",
+          edits.insertLine(2, "second") && editDocument.lineCount() == 2 &&
+              edits.undoLastOperation() && editDocument.lineCount() == 1);
+    check("EDIT-09 delete the only line and undo it",
+          edits.deleteLine(1) && editDocument.isEmpty() &&
+              edits.undoLastOperation() &&
+              editDocument.getLine(1) == "cat sat");
+    check("EDIT-10 delete and undo a line range",
+          edits.insertLine(2, "second") &&
+              edits.deleteLineRange(1, 2) && editDocument.isEmpty() &&
+              edits.undoLastOperation() &&
+              editDocument.getAllText() == "cat sat\nsecond");
+    check("EDIT-11 replace text and undo it",
+          edits.replaceText(1, 0, 3, "dog") &&
+              editDocument.getLine(1) == "dog sat" &&
+              edits.undoLastOperation() &&
+              editDocument.getLine(1) == "cat sat");
+    check("EDIT-12 undo a multi-line document replacement",
+          edits.replaceDocumentText("first\nsecond") &&
+              editDocument.getAllText() == "first\nsecond" &&
+              edits.undoLastOperation() &&
+              editDocument.getAllText() == "cat sat\nsecond");
 
-    // Search behaviour: byte columns, case handling and whole-word matching.
-    TextDocument searchDoc;
-    searchDoc.loadText("the cat sat on the mat\nThe Cat\nconcatenate cat");
-    TextSearch search(searchDoc);
+    TextDocument searchDocument;
+    searchDocument.loadText("cat scatter\nCAT cat");
+    TextSearch search(searchDocument);
     std::vector<Match> matches;
-    SearchStatus status = search.searchText("cat", matches, true, false);
-    check("SR-01 case-sensitive search finds three matches", status == SearchStatus::Found && matches.size() == 3);
-    check("SR-02 match coordinates are one-based lines and zero-based columns",
-          hasMatch(matches, 1, 4) && hasMatch(matches, 3, 12));
-    status = search.searchText("cat", matches, false, false);
-    check("SR-03 case-insensitive search finds four matches", status == SearchStatus::Found && matches.size() == 4);
-    status = search.searchText("cat", matches, false, true);
-    check("SR-04 whole-word search excludes concatenate", status == SearchStatus::Found && matches.size() == 3);
-    status = search.searchText("", matches);
-    check("SR-05 empty pattern is rejected", status == SearchStatus::EmptyPattern);
-    status = search.searchText("missing", matches);
-    check("SR-06 absent pattern reports NotFound", status == SearchStatus::NotFound);
+    SearchStatus searchStatus =
+        search.searchText("cat", matches, true, false);
+    check("SEARCH-01 find case-sensitive matches and report locations",
+          searchStatus == SearchStatus::Found && matches.size() == 3 &&
+              hasMatch(matches, 1, 0) && hasMatch(matches, 1, 5) &&
+              hasMatch(matches, 2, 4));
+    searchStatus = search.searchText("cat", matches, false, false);
+    check("SEARCH-02 find matches without case sensitivity",
+          searchStatus == SearchStatus::Found && matches.size() == 4);
+    searchStatus = search.searchText("cat", matches, false, true);
+    check("SEARCH-03 whole-word search excludes an embedded match",
+          searchStatus == SearchStatus::Found && matches.size() == 3 &&
+              !hasMatch(matches, 1, 5));
+    check("SEARCH-04 report missing and empty search strings",
+          search.searchText("missing", matches) == SearchStatus::NotFound &&
+              search.searchText("", matches) == SearchStatus::EmptyPattern);
+    TextDocument emptySearchDocument;
+    TextSearch emptySearch(emptySearchDocument);
+    check("SEARCH-05 reject a search on an empty document",
+          emptySearch.searchText("word", matches) ==
+              SearchStatus::EmptyDocument);
 
-    // Replacement and one-step undo for Replace All.
-    TextDocument replaceDoc;
-    replaceDoc.loadText("cat sits cat");
-    EditOperations replaceEdits(replaceDoc);
-    TextReplace replace(replaceDoc, replaceEdits);
-    ReplaceResult rr = replace.replaceFirstOccurrence("cat", "dog");
-    check("RP-01 Replace First changes one occurrence", rr.status == ReplaceStatus::Success && rr.replacements == 1 && replaceDoc.getLine(1) == "dog sits cat");
-    check("RP-02 undo Replace First", replaceEdits.undoLastOperation() && replaceDoc.getLine(1) == "cat sits cat");
-    rr = replace.replaceAllOccurrences("cat", "fox");
-    check("RP-03 Replace All changes both whole substrings", rr.status == ReplaceStatus::Success && rr.replacements == 2 && replaceDoc.getLine(1) == "fox sits fox");
-    check("RP-04 Replace All is one undo operation", replaceEdits.undoLastOperation() && replaceDoc.getLine(1) == "cat sits cat");
-    rr = replace.replaceFirstOccurrence("", "x");
-    check("RP-05 empty replacement pattern is rejected", rr.status == ReplaceStatus::EmptyPattern);
-    rr = replace.replaceFirstOccurrence("cat", "x\ny");
-    check("RP-06 replacement containing newline is rejected", rr.status == ReplaceStatus::InvalidText && replaceDoc.getLine(1) == "cat sits cat");
+    TextDocument replaceDocument;
+    replaceDocument.loadText("cat sits cat");
+    EditOperations replaceEdits(replaceDocument);
+    TextReplace replace(replaceDocument, replaceEdits);
+    ReplaceResult replacement =
+        replace.replaceFirstOccurrence("cat", "dog");
+    check("REPLACE-01 replace one occurrence",
+          replacement.status == ReplaceStatus::Success &&
+              replacement.replacements == 1 &&
+              replaceDocument.getLine(1) == "dog sits cat");
+    check("REPLACE-02 undo a replacement",
+          replaceEdits.undoLastOperation() &&
+              replaceDocument.getLine(1) == "cat sits cat");
+    replacement = replace.replaceAllOccurrences("cat", "fox");
+    check("REPLACE-03 replace all occurrences as one undoable edit",
+          replacement.status == ReplaceStatus::Success &&
+              replacement.replacements == 2 &&
+              replaceDocument.getLine(1) == "fox sits fox" &&
+              replaceEdits.undoLastOperation() &&
+              replaceDocument.getLine(1) == "cat sits cat");
+    replacement = replace.replaceOccurrenceAt(Match{1, 9}, "cat", "dog");
+    check("REPLACE-04 replace a specified occurrence",
+          replacement.status == ReplaceStatus::Success &&
+              replaceDocument.getLine(1) == "cat sits dog");
+    replacement = replace.replaceOccurrenceAt(Match{1, 0}, "dog", "fox");
+    check("REPLACE-05 reject a location that does not contain the pattern",
+          replacement.status == ReplaceStatus::NoMatchAtLocation &&
+              replaceDocument.getLine(1) == "cat sits dog");
+    replacement = replace.replaceFirstOccurrence("", "x");
+    check("REPLACE-06 reject an empty pattern",
+          replacement.status == ReplaceStatus::EmptyPattern);
+    replacement = replace.replaceFirstOccurrence("cat", "x\ny");
+    check("REPLACE-07 reject replacement text containing a line break",
+          replacement.status == ReplaceStatus::InvalidText);
+    TextDocument emptyReplaceDocument;
+    EditOperations emptyReplaceEdits(emptyReplaceDocument);
+    TextReplace emptyReplace(emptyReplaceDocument, emptyReplaceEdits);
+    check("REPLACE-08 reject replacement in an empty document",
+          emptyReplace.replaceFirstOccurrence("word", "text").status ==
+              ReplaceStatus::EmptyDocument);
 
-    // UTF-8 boundary protection (é is two bytes in UTF-8).
-    TextDocument utfDoc;
-    utfDoc.loadText("café");
-    EditOperations utfEdit(utfDoc);
-    check("UTF-01 insertion inside UTF-8 character is rejected",
-          !utfEdit.insertText(1, 4, "X") && utfDoc.getLine(1) == "café");
-    check("UTF-02 delete UTF-8 character as a whole", utfEdit.deleteCharacter(1, 3) && utfDoc.getLine(1) == "caf");
-    check("UTF-03 undo restores UTF-8 character", utfEdit.undoLastOperation() && utfDoc.getLine(1) == "café");
-
-    // UndoStack capacity and basic LIFO behaviour.
-    UndoStack stack(2);
-    check("US-01 push first record", stack.push(UndoRecord(EditType::InsertText, 0, 0, "", "a")));
-    check("US-02 push second record", stack.push(UndoRecord(EditType::InsertText, 0, 1, "", "b")));
-    check("US-03 stack reports full", stack.isFull() && stack.size() == 2);
-    check("US-04 third push evicts oldest", stack.push(UndoRecord(EditType::InsertText, 0, 2, "", "c")) && stack.size() == 2);
+    UndoStack undo(2);
+    const bool undoBasics =
+        undo.push(UndoRecord(EditType::InsertText, 0, 0, "", "a")) &&
+        undo.push(UndoRecord(EditType::InsertText, 0, 1, "", "b")) &&
+        undo.isFull() &&
+        undo.push(UndoRecord(EditType::InsertText, 0, 2, "", "c"));
     UndoRecord record;
-    check("US-05 pop returns newest record first", stack.pop(record) && record.newText == "c");
-    check("US-06 next pop returns next newest record", stack.pop(record) && record.newText == "b");
-    check("US-07 empty stack rejects pop", !stack.pop(record));
+    check("UNDO-01 bounded stack evicts oldest and preserves LIFO order",
+          undoBasics && undo.size() == 2 && undo.pop(record) &&
+              record.newText == "c" && undo.pop(record) &&
+              record.newText == "b" && !undo.pop(record));
 
-    // Input validation helpers.
+    testFileOperations();
+    testTextDisplay();
+
     int choice = -1;
-    check("IV-01 valid menu choice accepted", InputValidator::validateMenuChoice("12", 0, 18, choice) && choice == 12);
-    check("IV-02 non-numeric menu choice rejected", !InputValidator::validateMenuChoice("abc", 0, 18, choice));
-    check("IV-03 out-of-range menu choice rejected", !InputValidator::validateMenuChoice("19", 0, 18, choice));
-    check("IV-04 valid line number accepted", InputValidator::isValidLineNumber(1, 3));
-    check("IV-05 line zero rejected", !InputValidator::isValidLineNumber(0, 3));
-    check("IV-06 position at line end accepted", InputValidator::isValidPosition(5, 5));
-    check("IV-07 position beyond line end rejected", !InputValidator::isValidPosition(6, 5));
-    check("IV-08 empty search string detected", InputValidator::isSearchStringEmpty(""));
+    check("INPUT-01 accept valid menu choices and reject invalid ones",
+          InputValidator::validateMenuChoice("19", 0, 19, choice) &&
+              choice == 19 &&
+              !InputValidator::validateMenuChoice("abc", 0, 19, choice) &&
+              !InputValidator::validateMenuChoice("20", 0, 19, choice));
+    check("INPUT-02 validate line, position, and filename boundaries",
+          InputValidator::isValidLineNumber(1, 3) &&
+              !InputValidator::isValidLineNumber(0, 3) &&
+              InputValidator::isValidPosition(5, 5) &&
+              !InputValidator::isValidPosition(6, 5) &&
+              InputValidator::isValidFilename("notes.txt") &&
+              !InputValidator::isValidFilename("bad?.txt"));
+
+    int recoveredChoice = -1;
+    std::string inputMessages;
+    bool invalidInputRecovered = false;
+    {
+        ConsoleRedirect console("not-a-number\n2\n");
+        invalidInputRecovered =
+            InputValidator::readIntInRange("choice: ", 0, 3, recoveredChoice);
+        inputMessages = console.output();
+    }
+    check("INPUT-03 recover from invalid input without terminating",
+          invalidInputRecovered && recoveredChoice == 2 &&
+              inputMessages.find("Invalid input.") != std::string::npos);
 
     std::cout << "\n==============================\n"
               << "Tests passed: " << passed << '\n'

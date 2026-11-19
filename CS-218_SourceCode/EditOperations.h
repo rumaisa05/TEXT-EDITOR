@@ -19,7 +19,7 @@ private:
 public:
     explicit EditOperations(TextDocument& document, std::size_t undoCapacity = 100);
 
-    // Text positions are zero-based byte offsets; invalid edits return false.
+    // Lines are 1-based; text positions are zero-based byte offsets.
     bool insertText(std::size_t oneBasedLine, std::size_t position, const std::string& text);
     bool insertCharacter(std::size_t oneBasedLine, std::size_t position, char ch);
     bool deleteCharacter(std::size_t oneBasedLine, std::size_t position);
@@ -30,10 +30,9 @@ public:
     bool deleteLineRange(std::size_t firstLine, std::size_t count);
     bool replaceText(std::size_t oneBasedLine, std::size_t position,
                      std::size_t count, const std::string& replacement);
-    bool replaceDocumentText(const std::string& text, bool coalesceLocalEdit = false); // records one undo step
-    bool undoLastOperation(); // applies and removes the newest undo record
+    bool replaceDocumentText(const std::string& text, bool coalesceLocalEdit = false);
+    bool undoLastOperation();
 
-    // Expose undo availability without allowing callers to modify the history.
     bool undoIsEmpty() const;
     bool undoIsFull() const;
     std::size_t undoCount() const;

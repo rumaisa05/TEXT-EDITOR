@@ -6,7 +6,7 @@
 
 namespace {
 
-// Fold ASCII case only; unsigned-byte conversion keeps ctype calls well-defined.
+// Pass an unsigned byte to ctype and fold ASCII case only.
 unsigned char fold(char c, bool matchCase) {
     const unsigned char u = static_cast<unsigned char>(c);
     return matchCase ? u : static_cast<unsigned char>(std::tolower(u));
@@ -17,8 +17,7 @@ bool isWordByte(char c) {
     return u >= 0x80 || std::isalnum(u) || u == '_';
 }
 
-// Builds the KMP failure table (longest proper prefix which is also a suffix)
-// over the (optionally case-folded) pattern.
+// Build the KMP table of longest prefixes that are also suffixes.
 std::vector<std::size_t> buildFailureTableImpl(const std::string& pattern, bool matchCase) {
     std::vector<std::size_t> lps(pattern.size(), 0);
     std::size_t length = 0;
@@ -35,8 +34,7 @@ std::vector<std::size_t> buildFailureTableImpl(const std::string& pattern, bool 
     return lps;
 }
 
-// KMP scan of one line. Appends the starting column of every non-overlapping
-// accepted occurrence to 'columns'. Stops after the first one if firstOnly.
+// Find non-overlapping matches and append their starting columns.
 void scanLine(const std::string& text, const std::string& pattern,
               const std::vector<std::size_t>& lps, bool matchCase, bool wholeWord,
               bool firstOnly, std::vector<std::size_t>& columns) {
@@ -61,9 +59,9 @@ void scanLine(const std::string& text, const std::string& pattern,
             if (accepted) {
                 columns.push_back(start);
                 if (firstOnly) return;
-                matched = 0;                 // restart so the next match cannot overlap
+                matched = 0;                 // Prevent the next match from overlapping.
             } else {
-                matched = lps[matched - 1];  // rejected: keep scanning for overlapping candidates
+                matched = lps[matched - 1];  // Keep scanning after a rejected whole-word match.
             }
         }
     }
@@ -78,7 +76,6 @@ SearchStatus TextSearch::searchText(const std::string& pattern, std::vector<Matc
                                     bool matchCase, bool wholeWord) const {
     results.clear();
 
-    // Report invalid search inputs separately from a valid pattern with no matches.
     if (InputValidator::isSearchStringEmpty(pattern)) {
         return SearchStatus::EmptyPattern;
     }

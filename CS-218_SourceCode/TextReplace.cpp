@@ -10,14 +10,13 @@ TextReplace::TextReplace(TextDocument& document, EditOperations& editOperations)
 
 ReplaceStatus TextReplace::validateReplacement(const std::string& pattern,
                                                const std::string& replacement) const {
-    // Validate before searching or editing so a rejected request leaves state unchanged.
     if (InputValidator::isSearchStringEmpty(pattern)) {
         return ReplaceStatus::EmptyPattern;
     }
     if (InputValidator::isDocumentEmpty(document_)) {
         return ReplaceStatus::EmptyDocument;
     }
-    // Newlines would break the line-based structure of the document.
+    // Replacements cannot add lines to the line-based document.
     if (replacement.find_first_of("\r\n") != std::string::npos) {
         return ReplaceStatus::InvalidText;
     }
@@ -67,7 +66,6 @@ ReplaceResult TextReplace::replaceOccurrenceAt(const Match& location, const std:
         return ReplaceResult{ReplaceStatus::InvalidLocation, 0};
     }
 
-    // The text at the given location must actually equal the pattern.
     if (lineText.compare(location.column, pattern.size(), pattern) != 0) {
         return ReplaceResult{ReplaceStatus::NoMatchAtLocation, 0};
     }
@@ -85,13 +83,12 @@ ReplaceResult TextReplace::replaceAllOccurrences(const std::string& pattern,
         return ReplaceResult{validation, 0};
     }
 
-    // Assemble the result before changing the document so replace-all is atomic
-    // and can be recorded as a single undoable document edit.
+    // Build the result first so Replace All is applied as one edit.
     std::size_t total = 0;
     std::string newDocument;
     const std::size_t lines = document_.lineCount();
 
-    // The pattern is the same for every line, so preprocess it only once.
+    // Reuse one KMP table for every line.
     const std::vector<std::size_t> lps = TextSearch::buildLpsTable(pattern, matchCase);
 
     for (std::size_t line = 1; line <= lines; ++line) {
@@ -116,8 +113,6 @@ ReplaceResult TextReplace::replaceAllOccurrences(const std::string& pattern,
     if (total == 0) {
         return ReplaceResult{ReplaceStatus::NotFound, 0};
     }
-    // replaceDocumentText() returns false only when nothing changed (every match
-    // already equalled the replacement); that is still a successful replace-all.
     editOperations_.replaceDocumentText(newDocument);
     return ReplaceResult{ReplaceStatus::Success, total};
 }

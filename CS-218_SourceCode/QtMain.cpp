@@ -1,5 +1,4 @@
-// Qt GUI frontend. All editing logic lives in the backend classes; this file only
-// builds the window and forwards user actions to them.
+// Builds the Qt interface and forwards editing requests to the shared backend.
 #include <QtWidgets>
 #include <QGuiApplication>
 #include <QScreen>
@@ -20,8 +19,6 @@
 
 namespace gui {
 
-// ---------------------------------------------------------------- theme colours
-// Return the complete palette used by widgets and generated icons for a theme.
 QMap<QString, QString> themeColors(bool dark) {
     if (dark) return {
         {"bg1", "#17122f"}, {"bg2", "#0e0a21"}, {"card", "#1f1941"}, {"cardBorder", "#352c66"},
@@ -47,8 +44,6 @@ QMap<QString, QString> themeColors(bool dark) {
         {"sideTop", "#1a0c4c"}, {"sideBottom", "#4a22b8"}, {"switchOn", "#4f2fd0"}, {"switchOff", "#cfc6f5"}};
 }
 
-// ---------------------------------------------------------------- icons (Qt SVG is optional)
-// Render a named SVG icon when QtSvg is available; otherwise return an empty pixmap.
 QPixmap svgPixmap(const QString &name, const QString &color, int size) {
 #ifdef CS218_HAS_SVG
     static const QHash<QString, QString> shapes = {
@@ -110,7 +105,7 @@ QPixmap svgPixmap(const QString &name, const QString &color, int size) {
 }
 
 QPoint mousePos(const QMouseEvent *e) {
-    // Keep mouse handling source-compatible with both Qt 5 and Qt 6 event APIs.
+    // Qt 5 and Qt 6 expose mouse positions through different APIs.
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     return e->position().toPoint();
 #else
@@ -118,8 +113,6 @@ QPoint mousePos(const QMouseEvent *e) {
 #endif
 }
 
-// ---------------------------------------------------------------- small custom widgets
-// Paints the sidebar background and its low-contrast decorative waves.
 class Sidebar : public QWidget {
 public:
     QColor top{"#1a0c4c"}, bottom{"#4a22b8"};
@@ -130,7 +123,6 @@ protected:
         QLinearGradient g(0, 0, 0, height());
         g.setColorAt(0, top); g.setColorAt(1, bottom);
         p.fillRect(rect(), g);
-        // soft decorative waves near the bottom
         for (int i = 0; i < 2; ++i) {
             QPainterPath path;
             const qreal base = height() * (0.62 + i * 0.12), w = width();
@@ -146,8 +138,6 @@ class Logo : public QWidget {
 public:
     Logo() { setFixedSize(38, 38); }
 protected:
-    // App icon: violet squircle with a glossy top, a white page with a folded corner,
-    // three text lines and an amber caret (the "editor" cue). Everything scales with the widget size.
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
@@ -194,7 +184,6 @@ protected:
     }
 };
 
-// Supplies the frameless window's draggable title area and maximize gesture.
 class HeaderBar : public QWidget {
 protected:
     void mousePressEvent(QMouseEvent *e) override {
@@ -205,8 +194,7 @@ protected:
     }
 };
 
-// A bar that never forces the window wider (its size hint is ignored) and reports its real width,
-// so the owner can switch to an icon-only layout instead of overflowing small screens.
+// Reports width changes so the layout can switch to compact controls.
 class ResponsiveBar : public QFrame {
 public:
     std::function<void(int)> onWidth;
@@ -238,9 +226,8 @@ protected:
     }
 };
 
-// Plain-text editor whose gutter tracks visible blocks as the viewport scrolls.
+// Adds a line-number gutter to the plain-text editor.
 class CodeEditor : public QPlainTextEdit {
-    // The child widget delegates painting so the gutter stays clipped to its own area.
     class Gutter : public QWidget {
         CodeEditor *editor;
     public:
@@ -261,7 +248,6 @@ public:
         updateMargin();
     }
     int gutterWidth() const {
-        // Reserve enough digits for the current number of text blocks.
         int digits = 2, max = std::max(1, blockCount());
         while (max >= 100) { max /= 10; ++digits; }
         return 30 + fontMetrics().horizontalAdvance(QLatin1Char('9')) * digits;
@@ -269,7 +255,6 @@ public:
     void updateMargin() { setViewportMargins(gutterWidth(), 0, 0, 0); }
     void refreshGutter() { gutter->update(); }
     void paintGutter(QPaintEvent *ev) {
-        // Paint only visible line numbers, keeping the gutter efficient while scrolling.
         QPainter p(gutter);
         p.fillRect(ev->rect(), gutterBack);
         p.setPen(gutterLine);
@@ -299,11 +284,8 @@ protected:
 }  // namespace gui
 using namespace gui;
 
-// ================================================================ main window
-// Owns the GUI, synchronizes Qt text with the backend document, and routes all edits
-// through the undoable backend services.
+// Keeps the GUI synchronized with the shared document and editing services.
 class EditorWindow : public QMainWindow {
-    // ---- backend (unchanged) ----
     TextDocument doc;
     EditOperations edits{doc, 50};
     TextSearch search{doc};
@@ -312,7 +294,6 @@ class EditorWindow : public QMainWindow {
     bool modified = false, syncing = false, darkMode = false;
     FileManager files{doc, filename, modified};
 
-    // ---- widgets ----
     CodeEditor *editor = nullptr;
     QLineEdit *findInput = nullptr, *replaceInput = nullptr, *insertInput = nullptr;
     QListWidget *matchList = nullptr;
@@ -324,11 +305,9 @@ class EditorWindow : public QMainWindow {
     ToggleSwitch *themeSwitch = nullptr;
     Sidebar *sidebar = nullptr;
 
-    // ---- File commands (shared by the sidebar, the File menu and the keyboard shortcuts) ----
     QAction *actNew = nullptr, *actNewWindow = nullptr, *actOpen = nullptr,
             *actSave = nullptr, *actSaveAs = nullptr, *actExit = nullptr;
 
-    // ---- responsive layout state ----
     struct LabelledButton { QPushButton *b; QString text; QString tip; };
     QVector<LabelledButton> navButtons, toolButtons;
     QVBoxLayout *sideLayout = nullptr;
@@ -346,10 +325,9 @@ class EditorWindow : public QMainWindow {
     QVector<Hit> hits;
     int currentHit = 0;
 
-    QMap<QString, QString> tk;                       // current theme colours + asset paths
-    QVector<std::function<void()>> iconUpdaters;     // re-applied whenever the theme changes
+    QMap<QString, QString> tk;
+    QVector<std::function<void()>> iconUpdaters;
 
-    // ---- small builders ----
     QLabel *label(const QString &text, const char *name = nullptr) {
         auto *l = new QLabel(text);
         if (name) l->setObjectName(name);
@@ -357,7 +335,7 @@ class EditorWindow : public QMainWindow {
     }
     QSpinBox *number(int value = 1, bool compact = true) {
         auto *s = new QSpinBox; s->setRange(1, 1000000); s->setValue(value); s->setMinimumWidth(60);
-        s->setFocusPolicy(Qt::StrongFocus);   // mouse wheel scrolls the page instead of changing the value
+        s->setFocusPolicy(Qt::StrongFocus); // Keep the mouse wheel scrolling the page.
         if (compact) s->setMaximumWidth(74);
         return s;
     }
@@ -382,7 +360,6 @@ class EditorWindow : public QMainWindow {
         bindIcon(b, icon, role, size);
         return b;
     }
-    // A titled, collapsible card.
     QFrame *card(const QString &title, const QString &icon, QWidget *body, const QString &openChevron) {
         auto *f = new QFrame; f->setObjectName("card");
         auto *v = new QVBoxLayout(f); v->setContentsMargins(12, 10, 12, 12); v->setSpacing(8);
@@ -397,7 +374,6 @@ class EditorWindow : public QMainWindow {
         return f;
     }
 
-    // ---- dialogs / file handling ----
     void showError(const QString &message) { QMessageBox::warning(this, "CS-218 Editor", message); }
     template <class F> void safely(F f) {
         try { f(); }
@@ -412,23 +388,21 @@ class EditorWindow : public QMainWindow {
         if (choice == QMessageBox::Save) return save(false);
         return true;
     }
-    // Save (as == false) writes to the current file, or asks for a name when the document is still
-    // unnamed. Save As (as == true) always asks. Returns true only when the file was really written.
+    // Save As always asks for a path; Save asks only when the document is unnamed.
     bool save(bool as) {
         QString path = QString::fromStdString(filename);
         if (as || path.isEmpty()) {
-            // The file dialog itself asks before replacing an existing file, so we do not ask again.
             QFileDialog dialog(this, as ? "Save As" : "Save", path.isEmpty() ? QString("Untitled.txt") : path,
                                "Text files (*.txt);;All files (*)");
             dialog.setAcceptMode(QFileDialog::AcceptSave);
             dialog.setFileMode(QFileDialog::AnyFile);
             dialog.setDefaultSuffix("txt");
-            if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) return false;   // cancelled: not an error
+            if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) return false;
             path = dialog.selectedFiles().first();
             if (path.isEmpty()) return false;
         }
         const std::string target = path.toUtf8().toStdString();
-        bool ok = false, threw = true;      // 'threw' stays true if the backend raises: safely() reports that error itself
+        bool ok = false, threw = true; // Avoid a second warning after safely() reports an exception.
         safely([&] {
             ok = (as || target != filename) ? files.saveAs(target, false) : files.saveFile();
             threw = false;
@@ -437,20 +411,19 @@ class EditorWindow : public QMainWindow {
         updateStatus();
         return ok;
     }
-    // New Window: starts another, independent copy of the editor (its own document and undo history).
+    // Start another editor process with its own document and undo history.
     void newWindow() {
         QStringList args;
-        if (!isMaximized() && !isFullScreen()) args << QString("--pos=%1,%2").arg(x() + 32).arg(y() + 32);   // cascade
+        if (!isMaximized() && !isFullScreen()) args << QString("--pos=%1,%2").arg(x() + 32).arg(y() + 32);
         if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args)) showError("Could not open a new window.");
     }
-    // Each File command is ONE QAction. The sidebar buttons, the File menu and the keyboard shortcut all
-    // trigger that same object, so clicking and typing the shortcut can never behave differently.
+    // Share file actions between the sidebar, menu, and keyboard shortcuts.
     QAction *makeAction(const QString &text, const QKeySequence &keys, std::function<void()> fn) {
         auto *a = new QAction(text, this);
         a->setShortcut(keys);
         a->setShortcutContext(Qt::WindowShortcut);
         connect(a, &QAction::triggered, this, [fn] { fn(); });
-        addAction(a);       // makes the shortcut work wherever the focus is inside this window
+        addAction(a); // Keep shortcuts active while child widgets have focus.
         return a;
     }
     void createActions() {
@@ -475,9 +448,8 @@ class EditorWindow : public QMainWindow {
         });
     }
 
-    // ---- editor <-> document sync ----
     void loadEditor() {
-        // Suppress textChanged while refreshing from the backend and retain the cursor.
+        // Avoid treating a refresh as user input and keep the cursor position.
         syncing = true;
         auto cursor = editor->textCursor();
         int pos = cursor.position();
@@ -490,7 +462,6 @@ class EditorWindow : public QMainWindow {
         updateStatus();
     }
     void updateStatus() {
-        // Derive labels and action availability from the current editor/document state.
         const QString content = editor->toPlainText();
         const int words = content.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts).size();
         const auto c = editor->textCursor();
@@ -517,7 +488,6 @@ class EditorWindow : public QMainWindow {
         modified = true;
         loadEditor();
     }
-    // Undo goes through the backend's bounded undo stack.
     void doUndo() {
         if (edits.undoIsEmpty()) return;
         safely([&] {
@@ -525,9 +495,8 @@ class EditorWindow : public QMainWindow {
             else showError("Operation could not be completed.");
         });
     }
-    // Converts a UTF-16 column of the editor into the byte offset the document uses.
+    // Convert Qt's UTF-16 column to the backend's UTF-8 byte offset.
     bool byteOffset(int line, int column, std::size_t &out) {
-        // Qt columns count UTF-16 code units; the backend indexes UTF-8 bytes.
         if (line < 1 || static_cast<std::size_t>(line) > doc.lineCount() || column < 0) return false;
         const QString text = QString::fromStdString(doc.getLine(line));
         if (column > text.size()) return false;
@@ -535,14 +504,11 @@ class EditorWindow : public QMainWindow {
         return true;
     }
     std::size_t cursorByteColumn() {
-        // Convert the current UTF-16 cursor column to the backend's UTF-8 byte offset.
         const auto c = editor->textCursor();
         return static_cast<std::size_t>(QString::fromStdString(doc.getLine(c.blockNumber() + 1)).left(c.positionInBlock()).toUtf8().size());
     }
 
-    // ---- search / replace ----
     void refreshSearch() {
-        // Recompute backend matches, their Qt display positions, and the result list.
         hits.clear();
         const QString term = findInput->text();
         SearchStatus status = SearchStatus::NotFound;
@@ -558,7 +524,6 @@ class EditorWindow : public QMainWindow {
         }
         if (currentHit >= hits.size()) currentHit = 0;
 
-        // Summary message: whether the text occurs, how often, and on which lines.
         QString msg;
         if (status == SearchStatus::EmptyDocument) msg = "The document is empty. Nothing to search.";
         else if (hits.isEmpty()) msg = QString("\"%1\" was not found in the document.").arg(term);
@@ -578,7 +543,6 @@ class EditorWindow : public QMainWindow {
         searchMessage->setVisible(!term.isEmpty());
         searchMessage->setText(msg);
 
-        // One row per occurrence: "Line L, Column C" (1-based, same as the Ln/Col status). Click to jump.
         {
             QSignalBlocker block(matchList);
             matchList->clear();
@@ -596,7 +560,7 @@ class EditorWindow : public QMainWindow {
         updateStatus();
     }
     void paintHighlights() {
-        // Mark every hit, using a distinct color for the currently selected result.
+        // Highlight the selected match differently from the other results.
         QList<QTextEdit::ExtraSelection> selections;
         for (int i = 0; i < hits.size(); ++i) {
             const Hit h = hits[i];
@@ -611,7 +575,6 @@ class EditorWindow : public QMainWindow {
         editor->setExtraSelections(selections);
     }
     void selectHit(int index) {
-        // Move the editor cursor to a result and keep the list/highlighting in sync.
         if (index < 0 || index >= hits.size()) return;
         currentHit = index;
         const Hit h = hits[index];
@@ -625,7 +588,7 @@ class EditorWindow : public QMainWindow {
     }
     void showSearchNotice(const QString &text) { searchMessage->setText(text); searchMessage->setVisible(true); }
     void findNext() {
-        // Choose the next result after the cursor, wrapping to the first match.
+        // Wrap to the first result when the cursor is past the last match.
         if (findInput->text().isEmpty()) { showSearchNotice("Enter the text to search for."); return; }
         if (editor->toPlainText().isEmpty()) { showSearchNotice("The document is empty. Nothing to search."); return; }
         if (hits.isEmpty()) return;
@@ -642,24 +605,21 @@ class EditorWindow : public QMainWindow {
         selectHit(next);
     }
     bool replaceHit(int index) {
-        // Replace the exact matched bytes, including original case in insensitive searches.
         if (index < 0 || index >= hits.size()) return false;
         const Hit h = hits[index];
-        const std::string actual = doc.getLine(h.line).substr(h.byteCol, h.byteLen);   // the text really found (case may differ)
+        const std::string actual = doc.getLine(h.line).substr(h.byteCol, h.byteLen);
         const std::string replacement = replaceInput->text().toUtf8().toStdString();
-        if (actual == replacement) return false;                                         // nothing to change
+        if (actual == replacement) return false;
         const ReplaceResult r = replacer.replaceOccurrenceAt(Match{static_cast<std::size_t>(h.line), h.byteCol}, actual, replacement);
         if (r.status != ReplaceStatus::Success) throw std::runtime_error(TextReplace::describe(r.status));
         return true;
     }
 
-    // ---- theme ----
-    // One folder per running window: a second window (File > New Window) must not overwrite these files.
+    // Keep temporary assets separate for each editor process.
     static QString assetDirPath() {
         return QDir::temp().filePath(QString("cs218_editor_ui_%1").arg(QCoreApplication::applicationPid()));
     }
     void makeAssets(bool dark) {
-        // Generate the small raster controls used by stylesheets and spin boxes.
         QDir dir(assetDirPath());
         dir.mkpath(".");
         const QString tag = dark ? "dark" : "light";
@@ -687,7 +647,7 @@ class EditorWindow : public QMainWindow {
         tk["checkImg"] = QDir::fromNativeSeparators(dir.filePath("check.png"));
     }
     void applyTheme(bool dark) {
-        // Update colors, generated assets, widget styles, and the saved preference together.
+        // Apply the theme and save its preference together.
         darkMode = dark;
         tk = themeColors(dark);
         makeAssets(dark);
@@ -805,9 +765,9 @@ class EditorWindow : public QMainWindow {
     }
     void applyEditorFont() {
         QFont f = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-        f.setPointSize(12);                                   // fixed editor font size
+        f.setPointSize(12);
         editor->setFont(f);
-        editor->setLineWrapMode(QPlainTextEdit::NoWrap);      // long lines scroll sideways
+        editor->setLineWrapMode(QPlainTextEdit::NoWrap);
         editor->setTabStopDistance(4 * QFontMetricsF(f).horizontalAdvance(' '));
         editor->updateMargin();
     }
@@ -835,7 +795,6 @@ class EditorWindow : public QMainWindow {
             "• Files are read and saved as UTF-8; line endings (LF/CRLF) are preserved.");
     }
 
-    // ---- window frame (custom title bar) ----
     Qt::Edges edgesAt(const QPoint &p) const {
         Qt::Edges e;
         if (isMaximized() || isFullScreen()) return e;
@@ -847,7 +806,6 @@ class EditorWindow : public QMainWindow {
         return e;
     }
 
-    // ---- UI construction ----
     QWidget *buildSidebar() {
         sidebar = new Sidebar; sidebar->setFixedWidth(160);
         sideLayout = new QVBoxLayout(sidebar); sideLayout->setContentsMargins(10, 0, 10, 12); sideLayout->setSpacing(4);
@@ -858,7 +816,7 @@ class EditorWindow : public QMainWindow {
                            "<span style='font-size:10px;font-weight:600;color:#cdbfff'>TEXT EDITOR</span>", "brand");
         b->addStretch(1); b->addWidget(new Logo); b->addWidget(brandLabel); b->addStretch(1);
         v->addWidget(brand); v->addSpacing(14);
-        // 'act' (optional) supplies the shortcut that is shown in the button's tooltip.
+        // Show an action's shortcut in the button tooltip when available.
         auto nav = [&](const QString &text, const QString &icon, std::function<void()> fn, const QAction *act = nullptr, bool active = false) {
             auto *btn = new QPushButton(text); btn->setObjectName("nav"); btn->setCursor(Qt::PointingHandCursor);
             btn->setProperty("active", active);
@@ -888,9 +846,7 @@ class EditorWindow : public QMainWindow {
         v->addWidget(encButton);
         return sidebar;
     }
-    // Narrow windows: the sidebar shrinks to an icon-only rail so the editor keeps its room.
     void setSidebarCompact(bool compact) {
-        // Preserve navigation while reclaiming width on narrow windows.
         if (!sidebar || compact == sidebarCompact) return;
         sidebarCompact = compact;
         sidebar->setFixedWidth(compact ? 64 : 160);
@@ -966,7 +922,7 @@ class EditorWindow : public QMainWindow {
         bar->onWidth = [this](int w) { fitToolbar(w); };
         return bar;
     }
-    // Toolbar buttons keep their labels only while the whole row fits; otherwise they become icon-only.
+    // Hide toolbar labels when the row no longer fits.
     void setToolbarCompact(bool compact) {
         if (compact == toolbarCompact) return;
         toolbarCompact = compact;
@@ -977,7 +933,7 @@ class EditorWindow : public QMainWindow {
     }
     void fitToolbar(int available) {
         if (!toolbarLayout || available < 50) return;
-        if (toolbarNeed <= 0) {                 // measure the labelled layout once
+        if (toolbarNeed <= 0) {
             setToolbarCompact(false);
             toolbarNeed = toolbarLayout->totalSizeHint().width();
         }
@@ -1008,7 +964,6 @@ class EditorWindow : public QMainWindow {
     QWidget *buildBottomCards() {
         auto *row = new QWidget; auto *h = new QHBoxLayout(row); h->setContentsMargins(0, 0, 0, 0); h->setSpacing(12);
 
-        // Insert / Delete
         auto *ib = new QWidget; auto *ig = new QGridLayout(ib); ig->setContentsMargins(0, 0, 0, 0); ig->setHorizontalSpacing(6); ig->setVerticalSpacing(4);
         insertLine = number(); insertColumn = number(); insertInput = new QLineEdit; insertInput->setPlaceholderText("Text to insert");
         ig->addWidget(label("Line", "fieldLabel"), 0, 0); ig->addWidget(label("Column", "fieldLabel"), 0, 1); ig->addWidget(label("Text", "fieldLabel"), 0, 2);
@@ -1022,7 +977,6 @@ class EditorWindow : public QMainWindow {
         }); });
         h->addWidget(card("Insert / Delete", "plus-square", ib, "chevron-right"), 7);
 
-        // Delete lines
         auto *db = new QWidget; auto *dg = new QGridLayout(db); dg->setContentsMargins(0, 0, 0, 0); dg->setHorizontalSpacing(6); dg->setVerticalSpacing(4);
         deleteFrom = number(1, false); deleteTo = number(1, false);
         dg->addWidget(label("From line", "fieldLabel"), 0, 0); dg->addWidget(label("To line", "fieldLabel"), 0, 1);
@@ -1036,7 +990,6 @@ class EditorWindow : public QMainWindow {
         });
         h->addWidget(card("Delete Lines", "trash", db, "chevron-right"), 5);
 
-        // Delete range (within one line)
         auto *rb = new QWidget; auto *rg = new QGridLayout(rb); rg->setContentsMargins(0, 0, 0, 0); rg->setHorizontalSpacing(6); rg->setVerticalSpacing(4);
         rangeLine = number(); rangeFrom = number(); rangeTo = number(2);
         rangeTo->setToolTip("End column (not deleted)");
@@ -1102,7 +1055,7 @@ class EditorWindow : public QMainWindow {
         readyLayout->addWidget(readyIcon, 0, Qt::AlignHCenter); readyLayout->addWidget(text, 1);
         return f;
     }
-    // Short windows (typical 768-px laptops): the status card lays out icon-left / text-right to save height.
+    // Use a horizontal status layout on short screens.
     void setReadyShort(bool isShort) {
         if (!readyLayout || isShort == readyShort) return;
         readyShort = isShort;
@@ -1112,9 +1065,7 @@ class EditorWindow : public QMainWindow {
         readyTitle->setAlignment(a); readySub->setAlignment(a);
     }
 
-    // ---- fitting the window to the screen ----
     void applyResponsive() {
-        // Adapt sidebar, side-panel width, and status text to the current window size.
         if (!rightCol) return;
         setSidebarCompact(width() < 1200);
         const int w = std::clamp(static_cast<int>(width() * 0.22), 236, 300);
@@ -1122,7 +1073,7 @@ class EditorWindow : public QMainWindow {
         setReadyShort(height() < 780);
     }
     void fitToScreen() {
-        // Keep the frameless window inside the active screen's usable area.
+        // Keep the window inside the screen area outside the taskbar.
         QScreen *s = windowHandle() ? windowHandle()->screen() : QGuiApplication::primaryScreen();
         if (!s || isMaximized() || isFullScreen()) return;
         const QRect a = s->availableGeometry();
@@ -1140,18 +1091,17 @@ public:
     ~EditorWindow() override { QDir(assetDirPath()).removeRecursively(); }
 
     EditorWindow() {
-        // Build the UI first, then connect it to the shared document and editing services.
         QSettings s;
-        s.remove("fontSize"); s.remove("wrap");     // clean up values saved by older versions
+        s.remove("fontSize"); s.remove("wrap"); // Remove settings no longer used.
         const bool dark = s.value("darkMode", false).toBool();
         tk = themeColors(dark);
 
-        createActions();    // must exist before the sidebar and the File menu are built
+        createActions();
 
         setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
         setMouseTracking(true);
         setContentsMargins(3, 3, 3, 3);
-        {   // size the window from the usable screen area (taskbar excluded), never from fixed pixels
+        {
             QScreen *scr = QGuiApplication::screenAt(QCursor::pos());
             if (!scr) scr = QGuiApplication::primaryScreen();
             const QRect avail = scr ? scr->availableGeometry() : QRect(0, 0, 1280, 720);
@@ -1177,7 +1127,6 @@ public:
         grid->addWidget(buildBottomCards(), 1, 0);
         grid->setColumnStretch(0, 1); grid->setRowStretch(0, 1); grid->setRowStretch(1, 0);
         cw->addLayout(grid, 1);
-        // Safety net: if a tiny screen still cannot hold everything, the page scrolls instead of clipping.
         auto *scroll = new QScrollArea; scroll->setObjectName("contentScroll");
         scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
         scroll->setWidget(contentWrap);
@@ -1185,12 +1134,10 @@ public:
         mv->addWidget(scroll, 1);
         outer->addWidget(main, 1);
 
-        // soft drop shadow under the main cards
         applyTheme(dark);
         themeSwitch->setChecked(dark);
         applyEditorFont();
 
-        // ---- wiring ----
         connect(themeSwitch, &QAbstractButton::toggled, this, [this](bool on) { applyTheme(on); });
         connect(undoButton, &QPushButton::clicked, this, [this] { doUndo(); });
         connect(undoLast, &QPushButton::clicked, this, [this] { doUndo(); });
@@ -1227,8 +1174,7 @@ public:
             auto *sc = new QShortcut(QKeySequence(seq), this);
             connect(sc, &QShortcut::activated, this, [fn] { fn(); });
         };
-        // New / New Window / Open / Save / Save As / Exit shortcuts belong to the File actions (createActions);
-        // registering them a second time here would make the key sequences ambiguous and stop them working.
+        // File shortcuts are registered in createActions(); do not register them twice.
         shortcut("Ctrl+F", [this] { findInput->setFocus(); findInput->selectAll(); });
         shortcut("Ctrl+H", [this] { replaceInput->setFocus(); });
         shortcut("F3", [this] { findNext(); });
@@ -1240,9 +1186,7 @@ public:
     }
 
 protected:
-    // QPlainTextEdit claims Ctrl+Z for its own (disabled) undo whenever it has focus,
-    // so the application-wide shortcuts would never fire. Swallow those keys here so the
-    // shortcuts reach this window instead.
+    // Prevent the editor's disabled undo handler from swallowing Ctrl+Z.
     bool eventFilter(QObject *watched, QEvent *event) override {
         if (watched == editor && (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress)) {
             auto *key = static_cast<QKeyEvent *>(event);
@@ -1259,7 +1203,7 @@ protected:
     }
     void showEvent(QShowEvent *e) override {
         QMainWindow::showEvent(e);
-        if (!screenHooked && windowHandle()) {      // dragged to another monitor / DPI change: re-fit
+        if (!screenHooked && windowHandle()) { // Refit after moving to another monitor.
             screenHooked = true;
             connect(windowHandle(), &QWindow::screenChanged, this, [this](QScreen *) { fitToScreen(); });
         }
@@ -1291,7 +1235,7 @@ protected:
 };
 
 int main(int argc, char **argv) {
-    // Make logical sizes behave the same on 100% / 125% / 150% laptop displays.
+    // Keep widget sizes consistent across display scaling settings.
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
@@ -1304,7 +1248,7 @@ int main(int argc, char **argv) {
     QCoreApplication::setApplicationName("TextEditor");
     app.setStyle("Fusion");
     EditorWindow w;
-    for (const QString &arg : app.arguments()) {        // "--pos=X,Y" is passed by File > New Window so windows cascade
+    for (const QString &arg : app.arguments()) {
         if (!arg.startsWith("--pos=")) continue;
         const QStringList xy = arg.mid(6).split(',');
         bool okX = false, okY = false;

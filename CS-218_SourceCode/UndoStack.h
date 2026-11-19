@@ -28,9 +28,7 @@ struct UndoRecord {
         : type(t), line(l), position(p), oldText(oldValue), newText(newValue) {}
 };
 
-// A bounded undo history implemented as a doubly linked list.
-// The newest record is the "top"; when the history is full, pushing a new
-// record silently drops the OLDEST one (the bottom), so editing never locks up.
+// Stores recent undo records; adding to a full stack drops the oldest record.
 class UndoStack {
 private:
     struct StackNode {
@@ -47,8 +45,7 @@ private:
     void dropBottom() noexcept;
 
 public:
-    // Merged typing/deleting runs never grow beyond this many bytes, so a
-    // single undo step cannot wipe out an arbitrarily long piece of text.
+    // Caps the size of a merged typing or deletion undo step.
     static const std::size_t kMaxCoalescedBytes = 64;
 
     explicit UndoStack(std::size_t capacity = 100);
@@ -56,13 +53,13 @@ public:
     UndoStack(const UndoStack&) = delete;
     UndoStack& operator=(const UndoStack&) = delete;
 
-    bool push(const UndoRecord& record);            // evicts the oldest record when full
-    bool pushCoalescing(const UndoRecord& record);  // merges with the top record when possible
+    bool push(const UndoRecord& record);
+    bool pushCoalescing(const UndoRecord& record);
     bool pop(UndoRecord& record);
     bool peek(UndoRecord& record) const;
     bool discardTop() noexcept;
     bool isEmpty() const;
-    bool isFull() const;                            // true when at capacity (next push evicts)
+    bool isFull() const;
     std::size_t size() const;
     std::size_t capacity() const;
     void clear();

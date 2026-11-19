@@ -1,4 +1,3 @@
-// FileManager.cpp  (revised: exception handling)
 #include "FileManager.h"
 #include "InputValidator.h"
 #include "PathUtil.h"
@@ -8,7 +7,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
-#include <cstring>     // std::strerror
+#include <cstring>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
@@ -22,8 +21,7 @@
 #include <windows.h>
 #endif
 
-// File operations stage changes before committing them so a failed load or save
-// does not damage the open document or an existing destination file.
+// Stage file changes so failed reads and saves leave existing data intact.
 namespace {
 
 std::string trimFilename(const std::string& text) {
@@ -103,7 +101,6 @@ void collectMatches(const std::filesystem::path& root,
     }
 }
 
-// "what" plus the operating system's reason, when errno has one.
 std::string withReason(const std::string& what, int err) {
     if (err == 0) return what;
     return what + ": " + std::strerror(err);
@@ -129,7 +126,6 @@ std::filesystem::path createTempDirectory(const std::string& targetName) {
     throw std::runtime_error("could not allocate a unique temporary save directory");
 }
 
-// Owns the unique temporary directory created for one save operation.
 class TempDirectoryGuard {
 public:
     explicit TempDirectoryGuard(const std::filesystem::path& path)
@@ -158,18 +154,13 @@ FileManager::FileManager(TextDocument& document, std::string& filename, bool& mo
       crlf_(false)
 #endif
 {
-    modified_ = false;     // nothing has been changed yet
+    modified_ = false;
 }
 
 bool FileManager::isFileOpen() const { return fileOpen_; }
 bool FileManager::isModified() const { return fileOpen_ && modified_; }
 
-// ---------------------------------------------------------------- helpers
-
-// Reads the next NON-EMPTY line from the keyboard.
-// Returns false if input has ended (Ctrl+D / Ctrl+Z or a closed pipe), so
-// our loops can never run forever. Skipping empty lines also makes us safe
-// against a leftover '\n' from an earlier "cin >> x" in main.cpp.
+// Ignore empty answers and stop cleanly when input ends.
 bool FileManager::readAnswer(std::string& answer) {
     while (std::getline(std::cin, answer)) {
         if (!answer.empty()) return true;
@@ -177,7 +168,6 @@ bool FileManager::readAnswer(std::string& answer) {
     return false;
 }
 
-// True if a file with this name can be opened for reading.
 bool FileManager::fileExists(const std::string& name) {
     std::error_code error;
     const std::filesystem::path path = pathFromUtf8(name);
@@ -192,6 +182,7 @@ bool FileManager::resolveFilename(const std::string& name,
         return true;
     }
 
+    // Bare names search the current directory and available drives.
     std::error_code error;
     const std::filesystem::path cwd = std::filesystem::current_path(error);
     if (!error) {
@@ -257,10 +248,7 @@ bool FileManager::resolveFilename(const std::string& name,
     return true;
 }
 
-// Reads a whole file into 'content'. 'content' is touched ONLY on success,
-// which is how openFile() keeps the old document safe when something fails.
-// Throws std::runtime_error if the file cannot be opened and
-// std::ios_base::failure if reading it fails part-way (or it is a folder).
+// Read into a temporary buffer so failed reads leave content unchanged.
 void FileManager::readFromDisk(const std::string& name, std::string& content) {
     errno = 0;
     std::ifstream in(pathFromUtf8(name), std::ios::binary);
@@ -269,8 +257,7 @@ void FileManager::readFromDisk(const std::string& name, std::string& content) {
             withReason("cannot open '" + name + "' for reading", errno));
     }
 
-    // Read in blocks through the stream (not through a raw iterator) so that
-    // a failing device sets badbit instead of escaping as an unrelated error.
+    // Stream reads expose device errors through badbit.
     std::string temp;
     char buffer[65536];
     do {
@@ -278,20 +265,14 @@ void FileManager::readFromDisk(const std::string& name, std::string& content) {
         temp.append(buffer, static_cast<std::string::size_type>(in.gcount()));
     } while (in);
 
-    // The loop only ends at end-of-file (normal) or on an error.
     if (in.bad() || !in.eof()) {
         throw std::ios_base::failure("error while reading '" + name +
                                      "' (is it a regular file?)");
     }
-    content.swap(temp);                // swap = no copy of the big string
+    content.swap(temp);
 }
 
-// Writes the document SAFELY: first to a temporary file, and only when that
-// worked is it moved over the real file. If the disk fills up halfway, the
-// old file is still intact instead of being half-erased.
-// Throws std::runtime_error if a file cannot be created or replaced and
-// std::ios_base::failure if writing, flushing or closing fails. On any
-// failure the destination file is left as it was and the temp file is removed.
+// Write to a temporary file before replacing the destination.
 void FileManager::writeToDisk(const std::string& name) const {
     const std::filesystem::path target = pathFromUtf8(name);
     const std::filesystem::path temporaryDirectory = createTempDirectory(name);
@@ -317,24 +298,22 @@ void FileManager::writeToDisk(const std::string& name) const {
                            errno));
         }
         out.write(text.data(), static_cast<std::streamsize>(text.size()));
-        out.flush();                   // push buffered data to the OS now ...
-        if (!out) {                    // ... so a write error is visible here
+        out.flush();
+        if (!out) {
             throw std::ios_base::failure("failed while writing to '" + name + "'");
         }
         out.close();
-        if (out.fail()) {              // close() can fail too (final flush)
+        if (out.fail()) {
             throw std::ios_base::failure("failed while closing '" + name + "'");
         }
     }
 
-    // Move the finished temporary file over the real one. std::filesystem::rename
-    // replaces an existing file on both POSIX and Windows.
+    // Replace the destination only after the temporary file is complete.
     std::error_code renameError;
     std::filesystem::rename(tmp, target, renameError);
     if (renameError) {
 #ifdef _WIN32
-        // Fallback for a destination that cannot be replaced directly: park the
-        // original next to the temp file, move the new one in, restore on failure.
+        // Back up and restore the original if Windows cannot replace it directly.
         const std::filesystem::path bak =
             temporaryDirectory / (target.filename().string() + ".editor_bak");
         std::error_code e1;
@@ -369,7 +348,7 @@ FileManager::UnsavedChoice FileManager::askUnsavedChoice() const {
     std::string answer;
     while (true) {
         std::cout << "You have unsaved changes. (s)ave, (d)iscard, (c)ancel: ";
-        if (!readAnswer(answer)) return CHOICE_CANCEL;      // input ended: be safe
+        if (!readAnswer(answer)) return CHOICE_CANCEL;
         char c = static_cast<char>(std::tolower(static_cast<unsigned char>(answer[0])));
         if (c == 's') return CHOICE_SAVE;
         if (c == 'd') return CHOICE_DISCARD;
@@ -378,8 +357,6 @@ FileManager::UnsavedChoice FileManager::askUnsavedChoice() const {
     }
 }
 
-// Saves with whichever route fits: Save if the file has a name, otherwise
-// ask for a name and use Save As.
 bool FileManager::saveCurrentDocument() {
     if (filename_.empty()) {
         std::cout << "Enter a filename to save as: ";
@@ -390,15 +367,12 @@ bool FileManager::saveCurrentDocument() {
     return saveFile();
 }
 
-// ---------------------------------------------------- unsaved-change guard
-
 bool FileManager::resolveUnsavedChanges() {
-    if (!fileOpen_ || !modified_) return true;      // nothing to lose
+    if (!fileOpen_ || !modified_) return true;
 
     switch (askUnsavedChoice()) {
         case CHOICE_SAVE:
-            // If saving fails it throws, so we never get to the caller's
-            // "commit" step and nothing is lost.
+            // A failed save throws before the current document can be replaced.
             return saveCurrentDocument();
         case CHOICE_DISCARD:
             std::cout << "Changes discarded.\n";
@@ -409,8 +383,6 @@ bool FileManager::resolveUnsavedChanges() {
             return false;
     }
 }
-
-// ------------------------------------------------------------ public API
 
 bool FileManager::createNewDocument(bool resolveChanges) {
     if (resolveChanges && !resolveUnsavedChanges()) return false;
@@ -445,19 +417,15 @@ bool FileManager::openFile(const std::string& name, bool resolveChanges) {
         return false;
     }
 
-    // Step 1: read the file into a TEMPORARY string. If this throws, the
-    // current document is completely untouched.
+    // Load the new file before changing the current document.
     std::string content;
     readFromDisk(resolvedName, content);
     TextDocument newDocument;
     newDocument.loadText(content);
 
-    // Step 2: only now (we know the new file is readable) ask about unsaved
-    // changes in the current document. A failed save throws from here.
     if (resolveChanges && !resolveUnsavedChanges()) return false;
 
-    // Step 3: commit. Everything that can throw (the copy of the name) happens
-    // first; the swaps cannot throw, so the commit is all-or-nothing.
+    // Swap in the new state only after all fallible work is complete.
     std::string newName(resolvedName);
     const bool newCrlf = content.find("\r\n") != std::string::npos;
     document_.swap(newDocument);
@@ -478,7 +446,7 @@ bool FileManager::saveFile() {
         std::cout << "This document has no filename yet. Use Save As.\n";
         return false;
     }
-    writeToDisk(filename_);                         // throws; flag stays "modified"
+    writeToDisk(filename_);
     modified_ = false;
     std::cout << "Saved to '" << filename_ << "'.\n";
     return true;
@@ -493,12 +461,12 @@ bool FileManager::saveAs(const std::string& newName, bool confirmOverwrite) {
         return false;
     }
 
-    // Warn before overwriting a DIFFERENT file that already exists.
+    // Confirm before replacing a different existing file.
     if (confirmOverwrite && newName != filename_ && fileExists(newName)) {
         std::string answer;
         while (true) {
             std::cout << "Warning: '" << newName << "' already exists. Overwrite? (y/n): ";
-            if (!readAnswer(answer)) {                       // input ended: be safe
+            if (!readAnswer(answer)) {
                 std::cout << "Save As cancelled.\n";
                 return false;
             }
@@ -512,7 +480,7 @@ bool FileManager::saveAs(const std::string& newName, bool confirmOverwrite) {
         }
     }
 
-    writeToDisk(newName);                      // throws; old filename + flag unchanged
+    writeToDisk(newName);
     filename_ = newName;
     modified_ = false;
     std::cout << "Saved as '" << filename_ << "'.\n";

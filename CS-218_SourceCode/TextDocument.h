@@ -7,7 +7,7 @@
 // Stores text as a doubly linked list of lines; public line numbers are 1-based.
 class TextDocument {
 private:
-    // Each line owns a growable, null-terminated byte buffer.
+    // Each node owns one null-terminated line buffer.
     struct LineNode {
         char* data;
         std::size_t length;
@@ -24,7 +24,7 @@ private:
     LineNode* tail_;
     std::size_t lineCount_;
 
-    // Internal helpers use zero-based indexes and keep the list links consistent.
+    // Internal line indexes are zero-based.
     LineNode* nodeAt(std::size_t zeroBasedLine) const;
     void insertLineRaw(std::size_t zeroBasedLine, const std::string& text);
     std::string deleteLineRaw(std::size_t zeroBasedLine);
@@ -33,20 +33,20 @@ private:
     friend class EditOperations;
 
 public:
-    // A new document starts with one empty line; copies are disabled to preserve ownership.
+    // Starts with one empty line; copying is disabled because nodes are owned.
     TextDocument();
     ~TextDocument();
     TextDocument(const TextDocument&) = delete;
     TextDocument& operator=(const TextDocument&) = delete;
 
-    std::size_t lineCount() const; // number of stored lines
-    bool isEmpty() const; // true only when the document contains no text
+    std::size_t lineCount() const;
+    bool isEmpty() const;
     std::string getLine(std::size_t oneBasedLine) const;
     std::size_t lineLength(std::size_t oneBasedLine) const;
-    std::string getAllText() const; // joins lines with '\n'
-    void clear(); // removes all line nodes
-    void loadText(const std::string& text); // normalizes CRLF/CR and replaces the document
-    void swap(TextDocument& other) noexcept; // exchanges document contents without copying
+    std::string getAllText() const;
+    void clear();
+    void loadText(const std::string& text);
+    void swap(TextDocument& other) noexcept;
 };
 
 #endif

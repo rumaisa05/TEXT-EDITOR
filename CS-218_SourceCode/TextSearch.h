@@ -19,45 +19,33 @@ enum class SearchStatus {
     EmptyDocument
 };
 
-// All searching uses the KMP algorithm. Every search function accepts two
-// optional switches (defaults keep the original behaviour):
-//   matchCase - false folds ASCII letters to lower case before comparing
-//   wholeWord - true only accepts matches that are not part of a longer word
-//               (letters, digits, '_' and non-ASCII bytes count as word characters)
+// Searches with KMP. Case-insensitive matching folds ASCII letters only.
 class TextSearch {
 public:
     explicit TextSearch(const TextDocument& document);
 
-    // Collects every non-overlapping match. Returns the status describing the outcome.
     SearchStatus searchText(const std::string& pattern, std::vector<Match>& results,
                             bool matchCase = true, bool wholeWord = false) const;
 
-    // Returns true and fills 'first' if at least one match exists.
     bool findFirstOccurrence(const std::string& pattern, Match& first,
                              bool matchCase = true, bool wholeWord = false) const;
 
     std::vector<Match> findAllOccurrences(const std::string& pattern,
                                           bool matchCase = true, bool wholeWord = false) const;
 
-    // Convenience check using the default case-sensitive, substring search.
     bool isSearchStringPresent(const std::string& pattern) const;
 
-    // Searches just one 1-based line and returns byte-based columns.
     std::vector<Match> findMatchesInLine(const std::string& pattern, std::size_t lineNumber,
                                          bool matchCase = true, bool wholeWord = false) const;
 
-    // Builds the KMP LPS (failure) table. Reuse it when searching the same
-    // pattern across multiple lines, as Replace All does.
     static std::vector<std::size_t> buildLpsTable(const std::string& pattern,
                                                   bool matchCase = true);
 
-    // Searches one line using a previously built LPS table, avoiding repeated
-    // preprocessing when the same pattern is used on many lines.
+    // Pass a prebuilt LPS table to reuse pattern preprocessing across lines.
     std::vector<Match> findMatchesInLine(const std::string& pattern, std::size_t lineNumber,
                                          const std::vector<std::size_t>& lps,
                                          bool matchCase, bool wholeWord) const;
 
-    // Prints the outcome and every matching location to standard output.
     void displaySearchResults(const std::string& pattern) const;
 
 private:
