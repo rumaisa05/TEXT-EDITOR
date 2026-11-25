@@ -68,7 +68,7 @@ If these tools are not installed:
 
 5. In PowerShell, add the tools to this terminal session:
 
-   ```powershell
+   ```powershell 
    $env:Path += ";C:\msys64\ucrt64\bin"
    ```
 
